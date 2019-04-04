@@ -1101,6 +1101,12 @@ typedef enum {
     Z3_OP_BUREM_I,
     Z3_OP_BSMOD_I,
 
+    // Special relations
+    Z3_OP_SPECIAL_RELATION_LO,
+    Z3_OP_SPECIAL_RELATION_PO,
+    Z3_OP_SPECIAL_RELATION_PLO,
+    Z3_OP_SPECIAL_RELATION_TO,
+
     // Proofs
     Z3_OP_PR_UNDEF = 0x500,
     Z3_OP_PR_TRUE,
@@ -1168,8 +1174,10 @@ typedef enum {
     Z3_OP_SEQ_EXTRACT,
     Z3_OP_SEQ_REPLACE,
     Z3_OP_SEQ_AT,
+    Z3_OP_SEQ_NTH,
     Z3_OP_SEQ_LENGTH,
     Z3_OP_SEQ_INDEX,
+    Z3_OP_SEQ_LAST_INDEX,
     Z3_OP_SEQ_TO_RE,
     Z3_OP_SEQ_IN_RE,
 
@@ -3291,6 +3299,13 @@ extern "C" {
     bool Z3_API Z3_is_seq_sort(Z3_context c, Z3_sort s);
 
     /**
+       \brief Retrieve basis sort for sequence sort.
+
+       def_API('Z3_get_seq_sort_basis', SORT, (_in(CONTEXT), _in(SORT)))
+     */
+    Z3_sort Z3_API Z3_get_seq_sort_basis(Z3_context c, Z3_sort s);
+
+    /**
        \brief Create a regular expression sort out of a sequence sort.
 
        def_API('Z3_mk_re_sort', SORT, (_in(CONTEXT), _in(SORT)))
@@ -3303,6 +3318,13 @@ extern "C" {
        def_API('Z3_is_re_sort', BOOL, (_in(CONTEXT), _in(SORT)))
      */
     bool Z3_API Z3_is_re_sort(Z3_context c, Z3_sort s);
+
+    /**
+       \brief Retrieve basis sort for regex sort.
+
+       def_API('Z3_get_re_sort_basis', SORT, (_in(CONTEXT), _in(SORT)))
+     */
+    Z3_sort Z3_API Z3_get_re_sort_basis(Z3_context c, Z3_sort s);
 
     /**
        \brief Create a sort for 8 bit strings.
@@ -3326,6 +3348,15 @@ extern "C" {
        def_API('Z3_mk_string' ,AST ,(_in(CONTEXT), _in(STRING)))
      */
     Z3_ast Z3_API Z3_mk_string(Z3_context c, Z3_string s);
+
+    /**
+       \brief Create a string constant out of the string that is passed in
+       It takes the length of the string as well to take into account
+       0 characters.
+
+       def_API('Z3_mk_lstring' ,AST ,(_in(CONTEXT), _in(UINT), _in(STRING)))
+     */
+    Z3_ast Z3_API Z3_mk_lstring(Z3_context c, unsigned len, Z3_string s);
 
     /**
        \brief Determine if \c s is a string constant.
@@ -3411,10 +3442,19 @@ extern "C" {
 
     /**
        \brief Retrieve from \c s the unit sequence positioned at position \c index.
+       The sequence is empty if the index is out of bounds.
 
        def_API('Z3_mk_seq_at' ,AST ,(_in(CONTEXT), _in(AST), _in(AST)))
      */
     Z3_ast Z3_API Z3_mk_seq_at(Z3_context c, Z3_ast s, Z3_ast index);
+
+    /**
+       \brief Retrieve from \c s the element positioned at position \c index.
+       The function is under-specified if the index is out of bounds.
+
+       def_API('Z3_mk_seq_nth' ,AST ,(_in(CONTEXT), _in(AST), _in(AST)))
+     */
+    Z3_ast Z3_API Z3_mk_seq_nth(Z3_context c, Z3_ast s, Z3_ast index);
 
     /**
        \brief Return the length of the sequence \c s.
@@ -3427,11 +3467,18 @@ extern "C" {
     /**
        \brief Return index of first occurrence of \c substr in \c s starting from offset \c offset.
        If \c s does not contain \c substr, then the value is -1, if \c offset is the length of \c s, then the value is -1 as well.
-       The function is under-specified if \c offset is negative or larger than the length of \c s.
+       The value is -1 if \c offset is negative or larger than the length of \c s.
 
        def_API('Z3_mk_seq_index' ,AST ,(_in(CONTEXT), _in(AST), _in(AST), _in(AST)))
      */
     Z3_ast Z3_API Z3_mk_seq_index(Z3_context c, Z3_ast s, Z3_ast substr, Z3_ast offset);
+
+    /**
+       \brief Return the last occurrence of \c substr in \c s.
+       If \c s does not contain \c substr, then the value is -1, 
+       def_API('Z3_mk_seq_last_index', AST, (_in(CONTEXT), _in(AST), _in(AST)))
+    */
+    Z3_ast Z3_API Z3_mk_seq_last_index(Z3_context c, Z3_ast, Z3_ast substr);
 
     /**
        \brief Convert string to integer.
@@ -3554,9 +3601,49 @@ extern "C" {
      */
     Z3_ast Z3_API Z3_mk_re_full(Z3_context c, Z3_sort re);
 
-
     /*@}*/
 
+
+    /** @name Special relations */
+    /*@{*/
+    /**
+       \brief declare \c a and \c b are in linear order over a relation indexed by \c id.
+
+       \pre a and b are of same type.
+       
+
+       def_API('Z3_mk_linear_order', AST ,(_in(CONTEXT), _in(UINT), _in(AST), _in(AST)))
+     */
+    Z3_ast Z3_API Z3_mk_linear_order(Z3_context c, unsigned id, Z3_ast a, Z3_ast b);
+
+    /**
+       \brief declare \c a and \c b are in partial order over a relation indexed by \c id.
+
+       \pre a and b are of same type.
+
+       def_API('Z3_mk_partial_order', AST ,(_in(CONTEXT), _in(UINT), _in(AST), _in(AST)))
+     */
+    Z3_ast Z3_API Z3_mk_partial_order(Z3_context c, unsigned id, Z3_ast a, Z3_ast b);
+
+    /**
+       \brief declare \c a and \c b are in piecewise linear order indexed by relation \c id.
+
+       \pre a and b are of same type.
+
+       def_API('Z3_mk_piecewise_linear_order', AST ,(_in(CONTEXT), _in(UINT), _in(AST), _in(AST)))
+     */
+    Z3_ast Z3_API Z3_mk_piecewise_linear_order(Z3_context c, unsigned id, Z3_ast a, Z3_ast b);
+
+    /**
+       \brief declare \c a and \c b are in tree order indexed by \c id.
+
+       \pre a and b are of same type.
+
+       def_API('Z3_mk_tree_order', AST ,(_in(CONTEXT), _in(UINT), _in(AST), _in(AST)))
+     */
+    Z3_ast Z3_API Z3_mk_tree_order(Z3_context c, unsigned id, Z3_ast a, Z3_ast b);
+
+    /*@}*/
 
     /** @name Quantifiers */
     /*@{*/

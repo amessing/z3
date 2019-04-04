@@ -342,7 +342,7 @@ namespace datatype {
                 std::ostringstream buffer;
                 buffer << "second argument to field update should be " << mk_ismt2_pp(rng, m) 
                        << " instead of " << mk_ismt2_pp(domain[1], m);
-                m.raise_exception(buffer.str().c_str());
+                m.raise_exception(buffer.str());
                 return nullptr;
             }
             range = domain[0];
@@ -453,6 +453,49 @@ namespace datatype {
             }
         }
 
+        void plugin::log_axiom_definitions(symbol const& s, sort * new_sort) {
+            std::ostream& out = m_manager->trace_stream();
+            symbol const& family_name = m_manager->get_family_name(get_family_id());
+            for (constructor const* c : *m_defs[s]) {
+                func_decl_ref f = c->instantiate(new_sort);
+                const unsigned num_args = f->get_arity();
+                if (num_args == 0) continue;
+                for (unsigned i = 0; i < num_args; ++i) {
+                    out << "[mk-var] " << family_name << "#" << m_id_counter << " " << i << "\n";
+                    ++m_id_counter;
+                }
+                const unsigned constructor_id = m_id_counter;
+                out << "[mk-app] " << family_name << "#" << constructor_id << " " << f->get_name();
+                for (unsigned i = 0; i < num_args; ++i) {
+                    out << " " << family_name << "#" << constructor_id - num_args + i;
+                }
+                out << "\n";
+                ++m_id_counter;
+                out << "[mk-app] " << family_name << "#" << m_id_counter << " pattern " << family_name << "#" << constructor_id << "\n";
+                ++m_id_counter;
+                m_axiom_bases.insert(f->get_name(), constructor_id + 4);
+                std::ostringstream var_sorts;
+                for (accessor const* a : *c) {
+                    var_sorts << " (;" << a->range()->get_name() << ")";
+                }
+                std::string var_description = var_sorts.str();
+                unsigned i = 0;
+                for (accessor const* a : *c) {
+                    func_decl_ref acc = a->instantiate(new_sort);
+                    out << "[mk-app] " << family_name << "#" << m_id_counter << " " << acc->get_name() << " " << family_name << "#" << constructor_id << "\n";
+                    ++m_id_counter;
+                    out << "[mk-app] " << family_name << "#" << m_id_counter << " = " << family_name << "#" << constructor_id - num_args + i 
+                        << " " << family_name << "#" << m_id_counter - 1 << "\n";
+                    ++m_id_counter;
+                    out << "[mk-quant] " << family_name << "#" << m_id_counter << " constructor_accessor_axiom " << family_name << "#" << constructor_id + 1
+                        << " " << family_name << "#" << m_id_counter - 1 << "\n";
+                    out << "[attach-var-names] " << family_name << "#" << m_id_counter << var_description << "\n";
+                    ++m_id_counter;
+                    ++i;
+                }
+            }
+        }
+
         bool plugin::mk_datatypes(unsigned num_datatypes, def * const * datatypes, unsigned num_params, sort* const* sort_params, sort_ref_vector & new_sorts) {
             begin_def_block();
             for (unsigned i = 0; i < num_datatypes; ++i) {
@@ -470,6 +513,9 @@ namespace datatype {
             sort_ref_vector ps(*m_manager);
             for (symbol const& s : m_def_block) {                
                 new_sorts.push_back(m_defs[s]->instantiate(ps));
+                if (m_manager->has_trace_stream()) {
+                    log_axiom_definitions(s, new_sorts.back());
+                }
             }
             return true;
         }
@@ -1142,6 +1188,85 @@ namespace datatype {
             }
         }
     }
+
+    sort_ref util::mk_list_datatype(sort* elem, symbol const& name, 
+                                    func_decl_ref& cons, func_decl_ref& is_cons, 
+                                    func_decl_ref& hd, func_decl_ref& tl, 
+                                    func_decl_ref& nil, func_decl_ref& is_nil) {
+
+        accessor_decl* head_tail[2] = {
+            mk_accessor_decl(m, symbol("head"), type_ref(elem)),
+            mk_accessor_decl(m, symbol("tail"), type_ref(0))
+        };
+        constructor_decl* constrs[2] = {
+            mk_constructor_decl(symbol("nil"), symbol("is_nil"), 0, nullptr),
+            mk_constructor_decl(symbol("cons"), symbol("is_cons"), 2, head_tail)
+        };
+        decl::plugin& p = *get_plugin();
+
+        sort_ref_vector sorts(m);
+        datatype_decl * decl = mk_datatype_decl(*this, name, 0, nullptr, 2, constrs);
+        bool is_ok = p.mk_datatypes(1, &decl, 0, nullptr, sorts);
+        del_datatype_decl(decl);
+        
+        if (!is_ok) {
+            return sort_ref(m);
+        }
+        sort* s = sorts.get(0);
+        ptr_vector<func_decl> const& cnstrs = *get_datatype_constructors(s);
+        SASSERT(cnstrs.size() == 2);
+        nil = cnstrs[0];
+        is_nil = get_constructor_is(cnstrs[0]);
+        cons = cnstrs[1];
+        is_cons = get_constructor_is(cnstrs[1]);
+        ptr_vector<func_decl> const& acc = *get_constructor_accessors(cnstrs[1]);
+        SASSERT(acc.size() == 2);
+        hd = acc[0];
+        tl = acc[1];
+        return sort_ref(s, m);
+    }
+
+    sort_ref util::mk_pair_datatype(sort* a, sort* b, func_decl_ref& fst, func_decl_ref& snd, func_decl_ref& pair) {
+        type_ref t1(a), t2(b);
+        accessor_decl* fstd = mk_accessor_decl(m, symbol("fst"), t1);
+        accessor_decl* sndd = mk_accessor_decl(m, symbol("snd"), t2);
+        accessor_decl* accd[2] = { fstd, sndd };
+        auto * p = mk_constructor_decl(symbol("pair"), symbol("is-pair"), 2, accd);
+        auto* dt = mk_datatype_decl(*this, symbol("pair"), 0, nullptr, 1, &p);
+        sort_ref_vector sorts(m);
+        VERIFY(get_plugin()->mk_datatypes(1, &dt, 0, nullptr, sorts));
+        del_datatype_decl(dt);
+        sort* s = sorts.get(0);
+        ptr_vector<func_decl> const& cnstrs = *get_datatype_constructors(s);
+        SASSERT(cnstrs.size() == 1);
+        ptr_vector<func_decl> const& acc = *get_constructor_accessors(cnstrs[0]);
+        SASSERT(acc.size() == 2);
+        fst = acc[0];
+        snd = acc[1];
+        pair = cnstrs[0];
+        return sort_ref(s, m);
+    }
+
+    sort_ref util::mk_tuple_datatype(svector<std::pair<symbol, sort*>> const& elems, symbol const& name, symbol const& test, func_decl_ref& tup, func_decl_ref_vector& accs) {
+        ptr_vector<accessor_decl> accd;
+        for (auto const& e : elems) {
+            type_ref t(e.second);
+            accd.push_back(mk_accessor_decl(m, e.first, t));
+        }
+        auto* tuple = mk_constructor_decl(name, test, accd.size(), accd.c_ptr());
+        auto* dt = mk_datatype_decl(*this, name, 0, nullptr, 1, &tuple);
+        sort_ref_vector sorts(m);
+        VERIFY(get_plugin()->mk_datatypes(1, &dt, 0, nullptr, sorts));
+        del_datatype_decl(dt);
+        sort* s = sorts.get(0);
+        ptr_vector<func_decl> const& cnstrs = *get_datatype_constructors(s);
+        SASSERT(cnstrs.size() == 1);
+        ptr_vector<func_decl> const& acc = *get_constructor_accessors(cnstrs[0]);
+        for (auto* f : acc) accs.push_back(f);
+        tup = cnstrs[0];
+        return sort_ref(s, m);
+    }
+
 }
 
 datatype_decl * mk_datatype_decl(datatype_util& u, symbol const & n, unsigned num_params, sort*const* params, unsigned num_constructors, constructor_decl * const * cs) {

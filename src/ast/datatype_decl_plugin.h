@@ -206,13 +206,17 @@ namespace datatype {
         class plugin : public decl_plugin {
             mutable scoped_ptr<util> m_util;
             map<symbol, def*, symbol_hash_proc, symbol_eq_proc> m_defs; 
+            map<symbol, unsigned, symbol_hash_proc, symbol_eq_proc> m_axiom_bases;
+            unsigned                 m_id_counter;
             svector<symbol>          m_def_block;
             unsigned                 m_class_id;
 
             void inherit(decl_plugin* other_p, ast_translation& tr) override;
 
+            void log_axiom_definitions(symbol const& s, sort * new_sort);
+
         public:
-            plugin(): m_class_id(0) {}
+            plugin(): m_id_counter(0), m_class_id(0) {}
             ~plugin() override;
 
             void finalize() override;
@@ -247,6 +251,7 @@ namespace datatype {
             def const& get_def(sort* s) const { return *(m_defs[datatype_name(s)]); }
             def& get_def(symbol const& s) { return *(m_defs[s]); }
             bool is_declared(sort* s) const { return m_defs.contains(datatype_name(s)); }
+            unsigned get_axiom_base_id(symbol const& s) { return m_axiom_bases[s]; }
             util & u() const;
 
         private:
@@ -359,6 +364,12 @@ namespace datatype {
         decl::plugin* get_plugin() { return m_plugin; }
         void get_defs(sort* s, ptr_vector<def>& defs);
         def const& get_def(sort* s) const;
+        sort_ref mk_list_datatype(sort* elem, symbol const& name,
+                                  func_decl_ref& cons, func_decl_ref& is_cons, 
+                                  func_decl_ref& hd, func_decl_ref& tl, 
+                                  func_decl_ref& nil, func_decl_ref& is_nil);
+        sort_ref mk_pair_datatype(sort* a, sort* b, func_decl_ref& fst, func_decl_ref& snd, func_decl_ref& pair);
+        sort_ref mk_tuple_datatype(svector<std::pair<symbol, sort*>> const& elems, symbol const& name, symbol const& test, func_decl_ref& tup, func_decl_ref_vector& accs);
     };
 
 };

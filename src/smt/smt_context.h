@@ -106,6 +106,8 @@ namespace smt {
 
         unsigned                    m_final_check_idx; // circular counter used for implementing fairness
 
+        bool                        m_is_auxiliary; // used to prevent unwanted information from being logged.
+
         // -----------------------------------
         //
         // Equality & Uninterpreted functions
@@ -921,6 +923,7 @@ namespace smt {
         failure            m_last_search_failure;
         ptr_vector<theory> m_incomplete_theories; //!< theories that failed to produce a model
         bool               m_searching;
+        bool               m_propagating;
         unsigned           m_num_conflicts;
         unsigned           m_num_conflicts_since_restart;
         unsigned           m_num_conflicts_since_lemma_gc;

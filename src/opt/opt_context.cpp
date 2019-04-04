@@ -1166,7 +1166,13 @@ namespace opt {
        out << mk_pp(term, m);
        app* q = m.mk_fresh_const(out.str().c_str(), m.get_sort(term));
        if (!fm) fm = alloc(generic_model_converter, m, "opt");
-       m_hard_constraints.push_back(m.mk_eq(q, term));
+       if (m_arith.is_int_real(term)) {
+           m_hard_constraints.push_back(m_arith.mk_ge(q, term));
+           m_hard_constraints.push_back(m_arith.mk_le(q, term));
+       }
+       else {
+           m_hard_constraints.push_back(m.mk_eq(q, term));
+       }
        fm->hide(q);
        return q;
     }
@@ -1481,6 +1487,8 @@ namespace opt {
 
     void context::collect_param_descrs(param_descrs & r) {
         opt_params::collect_param_descrs(r);
+        insert_timeout(r);
+        insert_ctrl_c(r);
     }
     
     void context::updt_params(params_ref const& p) {
