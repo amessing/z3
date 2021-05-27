@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef DL_INSTRUCTION_H_
-#define DL_INSTRUCTION_H_
+#pragma once
 
 #include<iostream>
 #include<string>
@@ -225,8 +224,8 @@ namespace datalog {
 
            The newline character at the end should not be printed.
         */
-        virtual void display_head_impl(execution_context const & ctx, std::ostream & out) const {
-            out << "<instruction>";
+        virtual std::ostream& display_head_impl(execution_context const & ctx, std::ostream & out) const {
+            return out << "<instruction>";
         }
         /**
            \brief If relevant, output the body of the current instruction.
@@ -367,5 +366,4 @@ namespace datalog {
 
 };
 
-#endif /* DL_INSTRUCTION_H_ */
 

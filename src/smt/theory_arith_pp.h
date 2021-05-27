@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef THEORY_ARITH_PP_H_
-#define THEORY_ARITH_PP_H_
+#pragma once
 
 #include "smt/theory_arith.h"
 #include "ast/ast_smt_pp.h"
@@ -27,17 +26,21 @@ namespace smt {
     template<typename Ext>
     void theory_arith<Ext>::collect_statistics(::statistics & st) const {
         st.update("arith conflicts", m_stats.m_conflicts);
-        st.update("arith add rows", m_stats.m_add_rows);
+        st.update("arith row summations", m_stats.m_add_rows);
+        st.update("arith num rows", m_rows.size());
         st.update("arith pivots", m_stats.m_pivots);
         st.update("arith assert lower", m_stats.m_assert_lower);
         st.update("arith assert upper", m_stats.m_assert_upper);
         st.update("arith assert diseq", m_stats.m_assert_diseq);
         st.update("arith bound prop", m_stats.m_bound_props);
         st.update("arith fixed eqs", m_stats.m_fixed_eqs);
+        st.update("arith assume eqs", m_stats.m_assume_eqs);
         st.update("arith offset eqs", m_stats.m_offset_eqs);
         st.update("arith gcd tests", m_stats.m_gcd_tests);
         st.update("arith ineq splits", m_stats.m_branches);
         st.update("arith gomory cuts", m_stats.m_gomory_cuts);
+        st.update("arith branch int", m_stats.m_branch_infeasible_int);
+        st.update("arith branch var", m_stats.m_branch_infeasible_var);
         st.update("arith patches", m_stats.m_patches);
         st.update("arith patches_succ", m_stats.m_patches_succ);
         st.update("arith max-min", m_stats.m_max_min);
@@ -45,6 +48,8 @@ namespace smt {
         st.update("arith pseudo nonlinear", m_stats.m_nl_linear);
         st.update("arith nonlinear bounds", m_stats.m_nl_bounds);
         st.update("arith nonlinear horner", m_stats.m_nl_cross_nested);
+        st.update("arith tableau max rows", m_stats.m_tableau_max_rows);
+        st.update("arith tableau max columns", m_stats.m_tableau_max_columns);
         m_arith_eq_adapter.collect_statistics(st);
     }
 
@@ -65,10 +70,8 @@ namespace smt {
         if (m_nl_monomials.empty())
             return;
         out << "non linear monomials:\n";
-        svector<theory_var>::const_iterator it  = m_nl_monomials.begin();
-        svector<theory_var>::const_iterator end = m_nl_monomials.end();
-        for (; it != end; ++it)
-            display_var(out, *it);
+        for (auto nl : m_nl_monomials) 
+            display_var(out, nl);
     }
 
     template<typename Ext>
@@ -415,12 +418,12 @@ namespace smt {
 
     template<typename Ext>
     std::ostream& theory_arith<Ext>::antecedents_t::display(theory_arith& th, std::ostream & out) const {
-        th.get_context().display_literals_verbose(out, lits().size(), lits().c_ptr());
+        th.get_context().display_literals_verbose(out, lits().size(), lits().data());
         if (!lits().empty()) out << "\n";
         ast_manager& m = th.get_manager();
         for (auto const& e : m_eqs) {
-            out << mk_pp(e.first->get_owner(), m) << " ";
-            out << mk_pp(e.second->get_owner(), m) << "\n";            
+            out << mk_pp(e.first->get_expr(), m) << " ";
+            out << mk_pp(e.second->get_expr(), m) << "\n";            
         }
         return out;
     }
@@ -505,7 +508,7 @@ namespace smt {
         pp.set_benchmark_name("lemma");
         int n = get_num_vars();
         for (theory_var v = 0; v < n; v++) {
-            expr * n = get_enode(v)->get_owner();
+            expr * n = get_enode(v)->get_expr();
             if (is_fixed(v)) {
                 inf_numeral k_inf = lower_bound(v);
                 rational k = k_inf.get_rational().to_rational();
@@ -556,5 +559,4 @@ namespace smt {
 
 };
 
-#endif /* THEORY_ARITH_PP_H_ */
 

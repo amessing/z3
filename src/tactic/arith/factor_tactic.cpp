@@ -63,7 +63,7 @@ class factor_tactic : public tactic {
                 m_expr2poly.to_expr(fs[i], true, arg);
                 args.push_back(arg);
             }
-            result = m.mk_eq(mk_mul(args.size(), args.c_ptr()), mk_zero_for(arg));
+            result = m.mk_eq(mk_mul(args.size(), args.data()), mk_zero_for(arg));
         }
 
         // p1^k1 * p2^k2 = 0 --> p1 = 0 or p2 = 0
@@ -77,7 +77,7 @@ class factor_tactic : public tactic {
             if (args.size() == 1)
                 result = args[0];
             else
-                result = m.mk_or(args.size(), args.c_ptr());
+                result = m.mk_or(args.size(), args.data());
         }
 
         decl_kind flip(decl_kind k) {
@@ -106,7 +106,7 @@ class factor_tactic : public tactic {
                     arg = m_util.mk_power(arg, m_util.mk_numeral(rational(2), m_util.is_int(arg)));
                 args.push_back(arg);
             }
-            expr * lhs = mk_mul(args.size(), args.c_ptr());
+            expr * lhs = mk_mul(args.size(), args.data());
             result = m.mk_app(m_util.get_family_id(), k, lhs, mk_zero_for(lhs));
         }
 
@@ -155,15 +155,15 @@ class factor_tactic : public tactic {
                 }
             }
             else {
-                args.push_back(m.mk_app(m_util.get_family_id(), k, mk_mul(odd_factors.size(), odd_factors.c_ptr()), mk_zero_for(odd_factors[0])));
+                args.push_back(m.mk_app(m_util.get_family_id(), k, mk_mul(odd_factors.size(), odd_factors.data()), mk_zero_for(odd_factors[0])));
             }
             SASSERT(!args.empty());
             if (args.size() == 1)
                 result = args[0];
             else if (strict)
-                result = m.mk_and(args.size(), args.c_ptr());
+                result = m.mk_and(args.size(), args.data());
             else
-                result = m.mk_or(args.size(), args.c_ptr());
+                result = m.mk_or(args.size(), args.data());
         }
 
         br_status factor(func_decl * f, expr * lhs, expr * rhs, expr_ref & result) {
@@ -258,14 +258,13 @@ class factor_tactic : public tactic {
 
         void operator()(goal_ref const & g,
                         goal_ref_buffer & result) {
-            SASSERT(g->is_well_sorted());
             tactic_report report("factor", *g);
             bool produce_proofs = g->proofs_enabled();
 
             expr_ref   new_curr(m);
             proof_ref  new_pr(m);
             unsigned   size = g->size();
-            for (unsigned idx = 0; idx < size; idx++) {
+            for (unsigned idx = 0; !g->inconsistent() && idx < size; idx++) {
                 expr * curr = g->form(idx);
                 m_rw(curr, new_curr, new_pr);
                 if (produce_proofs) {
@@ -276,8 +275,6 @@ class factor_tactic : public tactic {
             }
             g->inc_depth();
             result.push_back(g.get());
-            TRACE("factor", g->display(tout););
-            SASSERT(g->is_well_sorted());
         }
     };
 

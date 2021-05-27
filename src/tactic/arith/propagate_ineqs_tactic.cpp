@@ -166,7 +166,7 @@ struct propagate_ineqs_tactic::imp {
             expr2linear_pol(t, m_num_buffer, m_var_buffer);
             m_num_buffer.push_back(mpq(-1));
             m_var_buffer.push_back(x);
-            bp.mk_eq(m_num_buffer.size(), m_num_buffer.c_ptr(), m_var_buffer.c_ptr());
+            bp.mk_eq(m_num_buffer.size(), m_num_buffer.data(), m_var_buffer.data());
         }
         return x;
     }
@@ -202,8 +202,27 @@ struct propagate_ineqs_tactic::imp {
                 k = GE;
             }
         }
-        else {
-            return false;
+        else if (m_util.is_lt(t)) {
+          if (sign) {
+            k = GE;
+            strict = false;
+          } else {
+            k = LE;
+            strict = true;
+          }
+        }
+        else if (m_util.is_gt(t)) {
+            //x > y == x <=y, strict = false
+            if (sign) {
+              k = LE;
+              strict = false;
+            } else {
+              k = GE;
+              strict = true;
+            }
+        }
+         else {
+          return false;
         }
         expr * lhs = to_app(t)->get_arg(0);
         expr * rhs = to_app(t)->get_arg(1);
@@ -259,7 +278,7 @@ struct propagate_ineqs_tactic::imp {
         mpq  implied_k;
         bool implied_strict;
         bool result = 
-            bp.lower(m_var_buffer.size(), m_num_buffer.c_ptr(), m_var_buffer.c_ptr(), implied_k, implied_strict) &&
+            bp.lower(m_var_buffer.size(), m_num_buffer.data(), m_var_buffer.data(), implied_k, implied_strict) &&
             (nm.gt(implied_k, k) || (nm.eq(implied_k, k) && (!strict || implied_strict)));
         nm.del(implied_k);
         return result;
@@ -274,7 +293,7 @@ struct propagate_ineqs_tactic::imp {
         mpq  implied_k;
         bool implied_strict;
         bool result = 
-            bp.upper(m_var_buffer.size(), m_num_buffer.c_ptr(), m_var_buffer.c_ptr(), implied_k, implied_strict) &&
+            bp.upper(m_var_buffer.size(), m_num_buffer.data(), m_var_buffer.data(), implied_k, implied_strict) &&
             (nm.lt(implied_k, k) || (nm.eq(implied_k, k) && (!strict || implied_strict)));
         nm.del(implied_k);
         return result;
@@ -528,14 +547,13 @@ void propagate_ineqs_tactic::updt_params(params_ref const & p) {
 
 void propagate_ineqs_tactic::operator()(goal_ref const & g, 
                                         goal_ref_buffer & result) {
-    SASSERT(g->is_well_sorted());
     fail_if_proof_generation("propagate-ineqs", g);
     fail_if_unsat_core_generation("propagate-ineqs", g);
     result.reset();
     goal_ref r;
     (*m_imp)(g.get(), r);
     result.push_back(r.get());
-    SASSERT(r->is_well_sorted());
+    SASSERT(r->is_well_formed());
 }
 
  

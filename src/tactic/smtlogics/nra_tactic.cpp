@@ -21,7 +21,7 @@ Notes:
 #include "tactic/core/propagate_values_tactic.h"
 #include "tactic/core/nnf_tactic.h"
 #include "tactic/arith/probe_arith.h"
-#include "smt/tactic/smt_tactic.h"
+#include "tactic/smtlogics/smt_tactic.h"
 #include "qe/qe_tactic.h"
 #include "qe/nlqsat.h"
 #include "qe/qe_lite.h"
@@ -39,6 +39,7 @@ tactic * mk_nra_tactic(ast_manager & m, params_ref const& p) {
         mk_simplify_tactic(m, p),
         mk_propagate_values_tactic(m, p),
         mk_qe_lite_tactic(m),
+        mk_simplify_tactic(m, p),
         cond(mk_is_qfnra_probe(),
              or_else(try_for(mk_qfnra_nlsat_tactic(m, p), 5000),
                      try_for(mk_qfnra_nlsat_tactic(m, p1), 10000),

@@ -27,7 +27,7 @@ Notes:
 #include "ast/bv_decl_plugin.h"
 #include "ast/rewriter/rewriter_def.h"
 #include "ast/for_each_expr.h"
-#include "util/cooperate.h"
+#include "ast/ast_util.h"
 #include "ast/rewriter/bv_rewriter.h"
 
 class bv1_blaster_tactic : public tactic {
@@ -73,7 +73,6 @@ class bv1_blaster_tactic : public tactic {
         bool rewrite_patterns() const { UNREACHABLE(); return false; }
         
         bool max_steps_exceeded(unsigned num_steps) const { 
-            cooperate("bv1 blaster");
             if (memory::get_allocation_size() > m_max_memory)
                 throw tactic_exception(TACTIC_MAX_MEMORY_MSG);
             return num_steps > m_max_steps;
@@ -110,7 +109,7 @@ class bv1_blaster_tactic : public tactic {
                 bits.push_back(m().mk_fresh_const(nullptr, b));
                 m_newbits.push_back(to_app(bits.back())->get_decl());
             }
-            r = butil().mk_concat(bits.size(), bits.c_ptr());
+            r = butil().mk_concat(bits.size(), bits.data());
             m_saved.push_back(r);
             m_const2bits.insert(f, r);
             result = r;
@@ -128,7 +127,7 @@ class bv1_blaster_tactic : public tactic {
                 --i;
                 bits.push_back(butil().mk_extract(i, i, t));
             }
-            result = butil().mk_concat(bits.size(), bits.c_ptr());
+            result = butil().mk_concat(bits.size(), bits.data());
         }
         
         void reduce_eq(expr * arg1, expr * arg2, expr_ref & result) {
@@ -143,7 +142,7 @@ class bv1_blaster_tactic : public tactic {
                 --i;
                 new_eqs.push_back(m().mk_eq(bits1[i], bits2[i]));
             }
-            result = m().mk_and(new_eqs.size(), new_eqs.c_ptr());
+            result = mk_and(m(), new_eqs.size(), new_eqs.data());
         }
         
         void reduce_ite(expr * c, expr * t, expr * e, expr_ref & result) {
@@ -154,9 +153,9 @@ class bv1_blaster_tactic : public tactic {
             SASSERT(t_bits.size() == e_bits.size());
             bit_buffer new_ites;
             unsigned num = t_bits.size();
-            for (unsigned i = 0; i < num; i++)
-                new_ites.push_back(m().mk_ite(c, t_bits[i], e_bits[i]));
-            result = butil().mk_concat(new_ites.size(), new_ites.c_ptr());
+            for (unsigned i = 0; i < num; i++)             
+                new_ites.push_back(t_bits[i] == e_bits[i] ? t_bits[i] : m().mk_ite(c, t_bits[i], e_bits[i]));
+            result = butil().mk_concat(new_ites.size(), new_ites.data());
         }
         
         void reduce_num(func_decl * f, expr_ref & result) {
@@ -175,7 +174,7 @@ class bv1_blaster_tactic : public tactic {
                 v = div(v, two);
             }
             std::reverse(bits.begin(), bits.end());
-            result = butil().mk_concat(bits.size(), bits.c_ptr());
+            result = butil().mk_concat(bits.size(), bits.data());
         }
         
         void reduce_extract(func_decl * f, expr * arg, expr_ref & result) {
@@ -191,7 +190,7 @@ class bv1_blaster_tactic : public tactic {
             for (unsigned i = start; i <= end; i++) {
                 bits.push_back(arg_bits[i]);
             }
-            result = butil().mk_concat(bits.size(), bits.c_ptr());
+            result = butil().mk_concat(bits.size(), bits.data());
         }
         
         void reduce_concat(unsigned num, expr * const * args, expr_ref & result) {
@@ -201,9 +200,9 @@ class bv1_blaster_tactic : public tactic {
                 expr * arg = args[i];
                 arg_bits.reset();
                 get_bits(arg, arg_bits);
-                bits.append(arg_bits.size(), arg_bits.c_ptr());
+                bits.append(arg_bits.size(), arg_bits.data());
             }
-            result = butil().mk_concat(bits.size(), bits.c_ptr());
+            result = butil().mk_concat(bits.size(), bits.data());
         }
 
         void reduce_bin_xor(expr * arg1, expr * arg2, expr_ref & result) {
@@ -217,7 +216,7 @@ class bv1_blaster_tactic : public tactic {
             for (unsigned i = 0; i < num; i++) {
                 new_bits.push_back(m().mk_ite(m().mk_eq(bits1[i], bits2[i]), m_bit0, m_bit1));
             }
-            result = butil().mk_concat(new_bits.size(), new_bits.c_ptr());
+            result = butil().mk_concat(new_bits.size(), new_bits.data());
         }
 
         void reduce_xor(unsigned num_args, expr * const * args, expr_ref & result) {

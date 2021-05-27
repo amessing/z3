@@ -130,11 +130,11 @@ class wcnf {
             if (parsed_lit == 0)
                 break;
             var = abs(parsed_lit);
-            p = m.mk_const(symbol(var), m.mk_bool_sort());
+            p = m.mk_const(symbol((unsigned)var), m.mk_bool_sort());
             if (parsed_lit < 0) p = m.mk_not(p);
             ors.push_back(p);
         }
-        result = to_app(mk_or(m, ors.size(), ors.c_ptr()));
+        result = to_app(mk_or(m, ors.size(), ors.data()));
         return result;
     }
     
@@ -198,7 +198,7 @@ class opb {
         }
         app_ref p(m);
         int id = in.parse_int();
-        p = m.mk_const(symbol(id), m.mk_bool_sort());
+        p = m.mk_const(symbol((unsigned)id), m.mk_bool_sort());
         if (negated) p = m.mk_not(p);
         in.skip_whitespace();
         return p;
@@ -222,7 +222,7 @@ class opb {
         in.skip_whitespace();
         while ('0' <= *in && *in <='9') num.push_back(*in), ++in;
         num.push_back(0);
-        return rational(num.c_ptr());
+        return rational(num.data());
     }
 
     app_ref parse_coeff() {
@@ -410,7 +410,8 @@ private:
                         c = in.ch();
                     }
                     m_buffer.push_back(0);
-                    m_tokens.push_back(asymbol(symbol(m_buffer.c_ptr()), in.line()));
+                    m_tokens.push_back(asymbol(symbol(m_buffer.data()), in.line()));
+                    IF_VERBOSE(10, verbose_stream() << "tok: " << m_tokens.back() << "\n");
                     continue;
                 }
             }
@@ -455,7 +456,7 @@ private:
                 }
             }
             m_buffer.push_back(0);
-            m_tokens.push_back(asymbol(symbol(m_buffer.c_ptr()), in.line()));
+            m_tokens.push_back(asymbol(symbol(m_buffer.data()), in.line()));
             IF_VERBOSE(10, verbose_stream() << "tok: " << m_tokens.back() << "\n");
         }
     }
@@ -686,12 +687,20 @@ private:
         return peek(pos) == "<=" || peek(pos) == "=<";
     }
 
-    bool peek_minus_infty(unsigned pos) {
+    bool peek_minus_infty_long(unsigned pos) {
         return peek(pos) == "-" && (peek(pos+1) == "inf" || peek(pos+1) == "infinity");
     }
 
-    bool peek_plus_infty(unsigned pos) {
+    bool peek_minus_infty_short(unsigned pos) {
+        return peek(pos) == "-inf" || peek(pos) == "-infinity";
+    }
+
+    bool peek_plus_infty_long(unsigned pos) {
         return peek(pos) == "+" && (peek(pos+1) == "inf" || peek(pos+1) == "infinity");
+    }
+
+    bool peek_plus_infty_short(unsigned pos) {
+        return peek(pos) == "+inf" || peek(pos) == "+infinity";
     }
 
     void parse_indicator(symbol& var, rational& val) {
@@ -730,13 +739,21 @@ private:
             tok.next(3);
             parse_upper(v);
         }
-        else if (peek_minus_infty(0) && peek_le(2)) {
+        else if (peek_minus_infty_long(0) && peek_le(2)) {
             v = peek(3);
             tok.next(4);
             parse_upper(v);
         }
-        else if (peek_plus_infty(2) && peek_le(1)) {
+        else if (peek_minus_infty_short(0) && peek_le(1)) {
+            v = peek(2);
+            tok.next(3);
+            parse_upper(v);
+        }
+        else if (peek_plus_infty_long(2) && peek_le(1)) {
             tok.next(4);            
+        }
+        else if (peek_plus_infty_short(2) && peek_le(1)) {
+            tok.next(3);
         }
         else if (peek_le(1) && tok.peek_num(2)) {
             v = peek(0);
@@ -756,9 +773,11 @@ private:
             update_upper(v, rhs);
             tok.next(2);
         }
-        else if (peek_le(0) && peek_plus_infty(1)) {
+        else if (peek_le(0) && peek_plus_infty_long(1)) {
             tok.next(3);            
         }
+        else if (peek_le(0) && peek_plus_infty_short(1)) {
+            tok.next(2);        }
 
     }
 
@@ -849,7 +868,7 @@ private:
             }
             result.push_back(term);
         }
-        return expr_ref(a.mk_add(result.size(), result.c_ptr()), m);
+        return expr_ref(a.mk_add(result.size(), result.data()), m);
     }
 
     expr_ref mk_var(symbol const& v) {

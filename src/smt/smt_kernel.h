@@ -24,14 +24,14 @@ Revision History:
         smt::solver     ---> smt::kernel
         default_solver  ---> smt::solver
 --*/
-#ifndef SMT_KERNEL_H_
-#define SMT_KERNEL_H_
+#pragma once
 
-#include "ast/ast.h"
 #include "util/params.h"
-#include "model/model.h"
 #include "util/lbool.h"
 #include "util/statistics.h"
+#include "ast/ast.h"
+#include "model/model.h"
+#include "solver/solver.h"
 #include "smt/smt_failure.h"
 
 struct smt_params;
@@ -128,9 +128,9 @@ namespace smt {
         */
         lbool check(unsigned num_assumptions = 0, expr * const * assumptions = nullptr);
 
-        lbool check(expr_ref_vector const& asms) { return check(asms.size(), asms.c_ptr()); }
+        lbool check(expr_ref_vector const& asms) { return check(asms.size(), asms.data()); }
 
-        lbool check(app_ref_vector const& asms) { return check(asms.size(), (expr* const*)asms.c_ptr()); }
+        lbool check(app_ref_vector const& asms) { return check(asms.size(), (expr* const*)asms.data()); }
 
         lbool check(expr_ref_vector const& cube, vector<expr_ref_vector> const& clauses);
 
@@ -151,9 +151,18 @@ namespace smt {
         lbool preferred_sat(expr_ref_vector const& asms, vector<expr_ref_vector>& cores);
 
         /**
+           \brief control phase selection and variable ordering.
+           Base implementation is a no-op.
+        */
+        void set_phase(expr * e) { }
+        solver::phase* get_phase() { return nullptr; }
+        void set_phase(solver::phase* p) { }
+        void move_to_front(expr* e) { }
+
+        /**
            \brief Return the model associated with the last check command.
         */
-        void get_model(model_ref & m) const;
+        void get_model(model_ref & m);
 
         /**
            \brief Return the proof of unsatisfiability associated with the last check command.
@@ -217,7 +226,13 @@ namespace smt {
         /**
            \brief return the next case split literal.
         */
-        expr* next_decision();
+        expr_ref next_cube();
+
+        /**
+           \brief return up to 2^depth cubes to case split on.
+        */
+        expr_ref_vector cubes(unsigned depth);
+
 
         /**
            \brief retrieve depth of variables from decision stack.
@@ -228,11 +243,6 @@ namespace smt {
            \brief retrieve trail of assignment stack.
         */
         expr_ref_vector get_trail();
-
-        /**
-           \brief set activity of literal
-        */
-        void set_activity(expr* lit, double activity);
 
         /**
            \brief (For debubbing purposes) Prints the state of the kernel
@@ -275,6 +285,30 @@ namespace smt {
         static void collect_param_descrs(param_descrs & d);
 
         /**
+           \brief initialize a user-propagator "theory"
+        */
+        void user_propagate_init(
+            void* ctx, 
+            solver::push_eh_t&      push_eh,
+            solver::pop_eh_t&       pop_eh,
+            solver::fresh_eh_t&     fresh_eh);
+
+        void user_propagate_register_fixed(solver::fixed_eh_t& fixed_eh);
+
+        void user_propagate_register_final(solver::final_eh_t& final_eh);
+        
+        void user_propagate_register_eq(solver::eq_eh_t& eq_eh);
+        
+        void user_propagate_register_diseq(solver::eq_eh_t& diseq_eh);
+
+
+        /**
+           \brief register an expression to be tracked fro user propagation.
+        */
+        unsigned user_propagate_register(expr* e);
+        
+
+        /**
            \brief Return a reference to smt::context.
            This is a temporary hack to support user theories.
            TODO: remove this hack.
@@ -288,4 +322,3 @@ namespace smt {
     };
 };
 
-#endif

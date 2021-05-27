@@ -47,8 +47,8 @@ namespace smt {
         m_model_finder(mf),
         m_max_cexs(1),
         m_iteration_idx(0),
-        m_has_rec_fun(false),
         m_curr_model(nullptr),
+        m_fresh_exprs(m),
         m_pinned_exprs(m) {
     }
 
@@ -78,6 +78,33 @@ namespace smt {
         return t;
     }
 
+    expr * model_checker::get_type_compatible_term(expr * val) {
+        app* fresh_term;
+        if (is_app(val) && to_app(val)->get_num_args() > 0) {
+            ptr_buffer<expr> args;
+            for (expr* arg : *to_app(val)) {
+                args.push_back(get_type_compatible_term(arg));
+            }
+            fresh_term = m.mk_app(to_app(val)->get_decl(), args.size(), args.data());
+        }
+        else {
+            expr * sk_term = get_term_from_ctx(val);
+            if (sk_term != nullptr) {
+                return sk_term;
+            }
+
+            for (expr* f : m_fresh_exprs) {
+                if (f->get_sort() == val->get_sort()) {
+                    return f;
+                }
+            }
+            fresh_term = m.mk_fresh_const("sk", val->get_sort());
+        }
+        m_fresh_exprs.push_back(fresh_term);
+        m_context->ensure_internalized(fresh_term);
+        return fresh_term;
+    }
+
     void model_checker::init_value2expr() {
         if (m_value2expr.empty()) {
             // populate m_value2expr
@@ -85,7 +112,7 @@ namespace smt {
                 enode * n   = kv.m_key;
                 expr  * val = kv.m_value;
                 n = n->get_eq_enode_with_min_gen();
-                m_value2expr.insert(val, n->get_owner());
+                m_value2expr.insert(val, n->get_expr());
             }
         }
     }
@@ -125,7 +152,7 @@ namespace smt {
         for (expr * e : universe) {
             eqs.push_back(m.mk_eq(sk, e));
         }
-        expr_ref fml(m.mk_or(eqs.size(), eqs.c_ptr()), m);
+        expr_ref fml(m.mk_or(eqs.size(), eqs.data()), m);
         m_aux_context->assert_expr(fml);
     }
 
@@ -135,15 +162,18 @@ namespace smt {
        The variables are replaced by skolem constants. These constants are stored in sks.
     */
 
-    void model_checker::assert_neg_q_m(quantifier * q, expr_ref_vector & sks) {
+    bool model_checker::assert_neg_q_m(quantifier * q, expr_ref_vector & sks) {
         expr_ref tmp(m);
+        
+        TRACE("model_checker", tout << "curr_model:\n"; model_pp(tout, *m_curr_model););
+
         if (!m_curr_model->eval(q->get_expr(), tmp, true)) {
-            return;
+            return false;
         }
         TRACE("model_checker", tout << "q after applying interpretation:\n" << mk_ismt2_pp(tmp, m) << "\n";);
         ptr_buffer<expr> subst_args;
         unsigned num_decls = q->get_num_decls();
-        subst_args.resize(num_decls, 0);
+        subst_args.resize(num_decls, nullptr);
         sks.resize(num_decls, nullptr);
         for (unsigned i = 0; i < num_decls; i++) {
             sort * s  = q->get_decl_sort(num_decls - i - 1);
@@ -156,11 +186,12 @@ namespace smt {
         }
 
         var_subst s(m);
-        expr_ref sk_body = s(tmp, subst_args.size(), subst_args.c_ptr());
+        expr_ref sk_body = s(tmp, subst_args.size(), subst_args.data());
         expr_ref r(m);
         r = m.mk_not(sk_body);
         TRACE("model_checker", tout << "mk_neg_q_m:\n" << mk_ismt2_pp(r, m) << "\n";);
         m_aux_context->assert_expr(r);
+        return true;
     }
 
     bool model_checker::add_instance(quantifier * q, model * cex, expr_ref_vector & sks, bool use_inv) {
@@ -185,7 +216,7 @@ namespace smt {
                 return false; // get_some_value failed... giving up
             }
             TRACE("model_checker", tout << "Got some value " << sk_value << "\n";);
-            
+
             if (use_inv) {
                 unsigned sk_term_gen;
                 expr * sk_term = m_model_finder.get_inv(q, i, sk_value, sk_term_gen);
@@ -207,11 +238,10 @@ namespace smt {
                 }
             }
             if (contains_model_value(sk_value)) {
-                TRACE("model_checker", tout << "value is private to model: " << sk_value << "\n";);
-                return false;
+                sk_value = get_type_compatible_term(sk_value);
             }
             func_decl * f = nullptr;
-            if (autil.is_as_array(sk_value, f) && cex->get_func_interp(f)) {
+            if (autil.is_as_array(sk_value, f) && cex->get_func_interp(f) && cex->get_func_interp(f)->get_interp()) {
                 expr_ref body(cex->get_func_interp(f)->get_interp(), m);
                 ptr_vector<sort> sorts(f->get_arity(), f->get_domain());
                 svector<symbol> names;
@@ -220,7 +250,7 @@ namespace smt {
                 }
                 defined_names dn(m);
                 body = replace_value_from_ctx(body);
-                body = m.mk_lambda(sorts.size(), sorts.c_ptr(), names.c_ptr(), body);
+                body = m.mk_lambda(sorts.size(), sorts.data(), names.data(), body);
                 // sk_value = m.mk_fresh_const(0, m.get_sort(sk_value));  // get rid of as-array
                 body = dn.mk_definition(body, to_app(sk_value));
                 defs.push_back(body);
@@ -267,7 +297,6 @@ namespace smt {
         return false;
     }
 
-
     bool model_checker::add_blocking_clause(model * cex, expr_ref_vector & sks) {
         SASSERT(cex != nullptr);
         expr_ref_buffer diseqs(m);
@@ -275,12 +304,13 @@ namespace smt {
             func_decl * sk_d = to_app(sk)->get_decl();
             expr_ref sk_value(cex->get_some_const_interp(sk_d), m);
             if (!sk_value) {
+                TRACE("model_checker", tout << "no constant interpretation for " << mk_pp(sk, m) << "\n";);
                 return false; // get_some_value failed... aborting add_blocking_clause
             }
             diseqs.push_back(m.mk_not(m.mk_eq(sk, sk_value)));
         }
         expr_ref blocking_clause(m);
-        blocking_clause = m.mk_or(diseqs.size(), diseqs.c_ptr());
+        blocking_clause = m.mk_or(diseqs.size(), diseqs.data());
         TRACE("model_checker", tout << "blocking clause:\n" << mk_ismt2_pp(blocking_clause, m) << "\n";);
         m_aux_context->assert_expr(blocking_clause);
         return true;
@@ -289,38 +319,48 @@ namespace smt {
     struct scoped_ctx_push {
         context* c;
         scoped_ctx_push(context* c): c(c) { c->push(); }
-        ~scoped_ctx_push() { c->pop(1); }
+        ~scoped_ctx_push() { 
+            try {
+                c->pop(1);
+            }
+            catch (...) {
+                ;
+            }
+        }
     };
 
     /**
        \brief Return true if q is satisfied by m_curr_model.
     */
+
     bool model_checker::check(quantifier * q) {
         SASSERT(!m_aux_context->relevancy());
         scoped_ctx_push _push(m_aux_context.get());
 
         quantifier * flat_q = get_flat_quantifier(q);
-        TRACE("model_checker", tout << "model checking:\n" << expr_ref(q->get_expr(), m) << "\n" << expr_ref(flat_q->get_expr(), m) << "\n";);
+        TRACE("model_checker", tout << "model checking:\n" << expr_ref(flat_q->get_expr(), m) << "\n";);
         expr_ref_vector sks(m);
 
-        assert_neg_q_m(flat_q, sks);
+        if (!assert_neg_q_m(flat_q, sks))
+            return false;
         TRACE("model_checker", tout << "skolems:\n" << sks << "\n";);
 
         flet<bool> l(m_aux_context->get_fparams().m_array_fake_support, true);
         lbool r = m_aux_context->check();
+        
         TRACE("model_checker", tout << "[complete] model-checker result: " << to_sat_str(r) << "\n";);
-        if (r != l_true) {            
+        if (r != l_true) {
             return r == l_false; // quantifier is satisfied by m_curr_model
         }
 
         model_ref complete_cex;
         m_aux_context->get_model(complete_cex);
-        
+
         // try to find new instances using instantiation sets.
         m_model_finder.restrict_sks_to_inst_set(m_aux_context.get(), q, sks);
-        
+
         unsigned num_new_instances = 0;
-        
+
         while (true) {
             flet<bool> l(m_aux_context->get_fparams().m_array_fake_support, true);
             lbool r = m_aux_context->check();
@@ -329,6 +369,7 @@ namespace smt {
                 break;
             model_ref cex;
             m_aux_context->get_model(cex);
+            
             if (!add_instance(q, cex.get(), sks, true)) {
                 break;
             }
@@ -347,35 +388,6 @@ namespace smt {
         }
 
         return false;
-    }
-
-    bool model_checker::check_rec_fun(quantifier* q, bool strict_rec_fun) {
-        TRACE("model_checker", tout << mk_pp(q, m) << "\n";);
-        SASSERT(q->get_num_patterns() == 2); // first pattern is the function, second is the body.
-        func_decl* f = m.get_rec_fun_decl(q);
-
-        expr_ref_vector args(m);
-        unsigned num_decls = q->get_num_decls();
-        args.resize(num_decls, nullptr);
-        var_subst sub(m);
-        expr_ref tmp(m), result(m);
-        for (enode* n : m_context->enodes_of(f)) {
-            if (m_context->is_relevant(n)) {
-                app* e = n->get_owner();
-                SASSERT(e->get_num_args() == num_decls);
-                for (unsigned i = 0; i < num_decls; ++i) {
-                    args[i] = e->get_arg(i);
-                }
-                tmp = sub(q->get_expr(), num_decls, args.c_ptr());
-                m_curr_model->eval(tmp, result, true);
-                if (strict_rec_fun ? !m.is_true(result) : m.is_false(result)) {
-                    add_instance(q, args, 0, nullptr);
-                    return false;
-                }
-                TRACE("model_checker", tout << tmp << "\nevaluates to:\n" << result << "\n";);                
-            }
-        }
-        return true;
     }
 
     void model_checker::init_aux_context() {
@@ -410,6 +422,9 @@ namespace smt {
         m_curr_model = md;
         m_value2expr.reset();
 
+        TRACE("model_checker", tout << "MODEL_CHECKER INVOKED\n";
+              tout << "model:\n"; model_pp(tout, *m_curr_model););
+
         md->compress();
 
         TRACE("model_checker", tout << "MODEL_CHECKER INVOKED\n";
@@ -423,7 +438,7 @@ namespace smt {
         bool found_relevant = false;
         unsigned num_failures = 0;
 
-        check_quantifiers(false, found_relevant, num_failures);
+        check_quantifiers(found_relevant, num_failures);
 
         if (found_relevant)
             m_iteration_idx++;
@@ -432,11 +447,11 @@ namespace smt {
         TRACE("model_checker", tout << "model checker result: " << (num_failures == 0) << "\n";);
         m_max_cexs += m_params.m_mbqi_max_cexs;
 
-        if (num_failures == 0 && (!m_context->validate_model() || has_rec_under_quantifiers())) {
+        if (num_failures == 0 && (!m_context->validate_model())) {
             num_failures = 1;
             // this time force expanding recursive function definitions
             // that are not forced true in the current model.
-            check_quantifiers(true, found_relevant, num_failures);
+            check_quantifiers(found_relevant, num_failures);
         }
         if (num_failures == 0)
             m_curr_model->cleanup();
@@ -449,60 +464,23 @@ namespace smt {
         return num_failures == 0;
     }
 
-    struct has_rec_fun_proc {
-        obj_hashtable<func_decl>& m_rec_funs;
-        bool m_has_rec_fun;
-
-        bool has_rec_fun() const { return m_has_rec_fun; }
-
-        has_rec_fun_proc(obj_hashtable<func_decl>& rec_funs):
-            m_rec_funs(rec_funs),
-            m_has_rec_fun(false) {}
-
-        void operator()(app* fn) {
-            m_has_rec_fun |= m_rec_funs.contains(fn->get_decl());
-        }
-        void operator()(expr*) {}
-    };
-
-    bool model_checker::has_rec_under_quantifiers() {
-        if (!m_has_rec_fun) {
-            return false;
-        }
-        obj_hashtable<func_decl> rec_funs;
-        for (quantifier * q : *m_qm) {
-            if (m.is_rec_fun_def(q)) {
-                rec_funs.insert(m.get_rec_fun_decl(q));
-            }            
-        }
-        expr_fast_mark1 visited;
-        has_rec_fun_proc proc(rec_funs);
-        for (quantifier * q : *m_qm) {
-            if (!m.is_rec_fun_def(q)) {
-                quick_for_each_expr(proc, visited, q);
-                if (proc.has_rec_fun()) return true;
-            }            
-        }
-        return false;
-    }
-
-    // 
+    //
     // (repeated from defined_names.cpp)
     // NB. The pattern for lambdas is incomplete.
     // consider store(a, i, v) == \lambda j . if i = j then v else a[j]
     // the instantiation rules for store(a, i, v) are:
     //     sotre(a, i, v)[j] = if i = j then v else a[j] with patterns {a[j], store(a, i, v)} { store(a, i, v)[j] }
     // The first pattern is not included.
-    // TBD use a model-based scheme for exracting instantiations instead of
+    // TBD use a model-based scheme for extracting instantiations instead of
     // using multi-patterns.
-    // 
+    //
 
-    void model_checker::check_quantifiers(bool strict_rec_fun, bool& found_relevant, unsigned& num_failures) {
+    void model_checker::check_quantifiers(bool& found_relevant, unsigned& num_failures) {
         for (quantifier * q : *m_qm) {
             if (!(m_qm->mbqi_enabled(q) &&
                   m_context->is_relevant(q) &&
                   m_context->get_assignment(q) == l_true &&
-                  !m.is_lambda_def(q))) {
+                  (!m_context->get_fparams().m_ematching || !m.is_lambda_def(q)))) {
                 continue;
             }
 
@@ -514,14 +492,7 @@ namespace smt {
                 verbose_stream() << "(smt.mbqi :checking " << q->get_qid() << ")\n";
             }
             found_relevant = true;
-            if (m.is_rec_fun_def(q)) {
-                m_has_rec_fun = true;
-                if (!check_rec_fun(q, strict_rec_fun)) {
-                    TRACE("model_checker", tout << "checking recursive function failed\n";);
-                    num_failures++;
-                }
-            }
-            else if (!check(q)) {
+            if (!check(q)) {
                 if (m_params.m_mbqi_trace || get_verbosity_level() >= 5) {
                     IF_VERBOSE(0, verbose_stream() << "(smt.mbqi :failed " << q->get_qid() << ")\n");
                 }
@@ -537,7 +508,7 @@ namespace smt {
     }
 
     void model_checker::restart_eh() {
-        IF_VERBOSE(100, verbose_stream() << "(smt.mbqi \"instantiating new instances...\")\n";);
+        IF_VERBOSE(100, if (has_new_instances()) verbose_stream() << "(smt.mbqi \"instantiating new instances...\")\n";);
         assert_new_instances();
         reset_new_instances();
     }
@@ -577,13 +548,26 @@ namespace smt {
                 }
 
                 if (inst.m_def) {
-                    m_context->internalize_assertion(inst.m_def, nullptr, gen);
+                    unsigned n = 1;
+                    expr* const* args = &inst.m_def;
+                    if (m.is_and(inst.m_def)) {
+                        n = to_app(inst.m_def)->get_num_args();
+                        args = to_app(inst.m_def)->get_args();
+                    }
+                    for (unsigned i = 0; i < n; ++i) {
+                        proof* pr = nullptr;
+                        expr* arg = args[i];
+                        if (m.proofs_enabled()) {
+                            pr = m.mk_def_intro(arg);
+                        }
+                        m_context->internalize_assertion(arg, pr, gen);
+                    }
                 }
-                
+
                 TRACE("model_checker_bug_detail", tout << "instantiating... q:\n" << mk_pp(q, m) << "\n";
                       tout << "inconsistent: " << m_context->inconsistent() << "\n";
-                      tout << "bindings:\n" << expr_ref_vector(m, num_decls, m_pinned_exprs.c_ptr() + offset) << "\n";);
-                m_context->add_instance(q, nullptr, num_decls, bindings.c_ptr(), inst.m_def, gen, gen, gen, dummy);
+                      tout << "bindings:\n" << expr_ref_vector(m, num_decls, m_pinned_exprs.data() + offset) << "\n";);
+                m_context->add_instance(q, nullptr, num_decls, bindings.data(), inst.m_def, gen, gen, gen, dummy);
                 TRACE("model_checker_bug_detail", tout << "after instantiating, inconsistent: " << m_context->inconsistent() << "\n";);
             }
         }

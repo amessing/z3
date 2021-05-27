@@ -18,6 +18,7 @@ Revision History:
 --*/
 #include "smt/smt_kernel.h"
 #include "smt/smt_context.h"
+#include "smt/smt_lookahead.h"
 #include "ast/ast_smt2_pp.h"
 #include "smt/params/smt_params_helper.hpp"
 
@@ -131,7 +132,7 @@ namespace smt {
             return m_kernel.find_mutexes(vars, mutexes);
         }
         
-        void get_model(model_ref & m) const {
+        void get_model(model_ref & m) {
             m_kernel.get_model(m);
         }
 
@@ -153,21 +154,6 @@ namespace smt {
 
         expr_ref_vector get_trail() {
             return m_kernel.get_trail();
-        }
-
-        void set_activity(expr* lit, double act) {
-            SASSERT(m().is_bool(lit));
-            m().is_not(lit, lit);
-            if (!m_kernel.b_internalized(lit)) {
-                m_kernel.internalize(lit, false);
-            }
-            if (!m_kernel.b_internalized(lit)) {
-                return;
-            }
-            auto v = m_kernel.get_bool_var(lit);
-            double old_act = m_kernel.get_activity(v);
-            m_kernel.set_activity(v, act);
-            m_kernel.activity_changed(v, act > old_act);
         }
         
         failure last_failure() const {
@@ -202,8 +188,14 @@ namespace smt {
             m_kernel.get_guessed_literals(result);
         }
 
-        expr* next_decision() {
-            return m_kernel.next_decision();
+        expr_ref next_cube() {
+            lookahead lh(m_kernel);
+            return lh.choose();
+        }
+
+        expr_ref_vector cubes(unsigned depth) {
+            lookahead lh(m_kernel);
+            return lh.choose_rec(depth);
         }
                 
         void collect_statistics(::statistics & st) const {
@@ -228,6 +220,35 @@ namespace smt {
         void updt_params(params_ref const & p) {
             m_kernel.updt_params(p);
         }
+
+        void user_propagate_init(
+            void*                    ctx, 
+            solver::push_eh_t&       push_eh,
+            solver::pop_eh_t&        pop_eh,
+            solver::fresh_eh_t&      fresh_eh) {
+            m_kernel.user_propagate_init(ctx, push_eh, pop_eh, fresh_eh);
+        }
+
+        void user_propagate_register_final(solver::final_eh_t& final_eh) {
+            m_kernel.user_propagate_register_final(final_eh);
+        }
+
+        void user_propagate_register_fixed(solver::fixed_eh_t& fixed_eh) {
+            m_kernel.user_propagate_register_fixed(fixed_eh);
+        }
+        
+        void user_propagate_register_eq(solver::eq_eh_t& eq_eh) {
+            m_kernel.user_propagate_register_eq(eq_eh);
+        }
+        
+        void user_propagate_register_diseq(solver::eq_eh_t& diseq_eh) {
+            m_kernel.user_propagate_register_diseq(diseq_eh);
+        }
+
+        unsigned user_propagate_register(expr* e) {
+            return m_kernel.user_propagate_register(e);
+        }
+        
     };
 
     kernel::kernel(ast_manager & m, smt_params & fp, params_ref const & p) {
@@ -293,11 +314,8 @@ namespace smt {
         ast_manager & _m = m();
         smt_params & fps = m_imp->fparams();
         params_ref ps    = m_imp->params();
-        #pragma omp critical (smt_kernel)
-        {
-            m_imp->~imp();
-            m_imp = new (m_imp) imp(_m, fps, ps);
-        }
+        m_imp->~imp();
+        m_imp = new (m_imp) imp(_m, fps, ps);        
     }
 
     bool kernel::inconsistent() {
@@ -318,7 +336,6 @@ namespace smt {
         return m_imp->check(cube, clauses);
     }
 
-
     lbool kernel::get_consequences(expr_ref_vector const& assumptions, expr_ref_vector const& vars, expr_ref_vector& conseq, expr_ref_vector& unfixed) {
         return m_imp->get_consequences(assumptions, vars, conseq, unfixed);
     }
@@ -331,7 +348,7 @@ namespace smt {
         return m_imp->find_mutexes(vars, mutexes);
     }
 
-    void kernel::get_model(model_ref & m) const {
+    void kernel::get_model(model_ref & m) {
         m_imp->get_model(m);
     }
 
@@ -379,8 +396,12 @@ namespace smt {
         m_imp->get_guessed_literals(result);
     }
 
-    expr* kernel::next_decision() {
-        return m_imp->next_decision();
+    expr_ref kernel::next_cube() {
+        return m_imp->next_cube();
+    }        
+
+    expr_ref_vector kernel::cubes(unsigned depth) {
+        return m_imp->cubes(depth);
     }        
 
     std::ostream& kernel::display(std::ostream & out) const {
@@ -428,9 +449,32 @@ namespace smt {
         return m_imp->get_trail();
     }
 
-    void kernel::set_activity(expr* lit, double activity) {
-        m_imp->set_activity(lit, activity);
+    void kernel::user_propagate_init(
+        void*                ctx, 
+        solver::push_eh_t&   push_eh,
+        solver::pop_eh_t&    pop_eh,
+        solver::fresh_eh_t&  fresh_eh) {
+        m_imp->user_propagate_init(ctx, push_eh, pop_eh, fresh_eh);
     }
 
+    void kernel::user_propagate_register_fixed(solver::fixed_eh_t& fixed_eh) {
+        m_imp->user_propagate_register_fixed(fixed_eh);
+    }
+    
+    void kernel::user_propagate_register_final(solver::final_eh_t& final_eh) {
+        m_imp->user_propagate_register_final(final_eh);
+    }
+    
+    void kernel::user_propagate_register_eq(solver::eq_eh_t& eq_eh) {
+        m_imp->user_propagate_register_eq(eq_eh);
+    }
+    
+    void kernel::user_propagate_register_diseq(solver::eq_eh_t& diseq_eh) {
+        m_imp->user_propagate_register_diseq(diseq_eh);
+    }
+
+    unsigned kernel::user_propagate_register(expr* e) {
+        return m_imp->user_propagate_register(e);
+    }        
 
 };

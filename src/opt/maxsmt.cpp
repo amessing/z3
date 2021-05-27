@@ -72,7 +72,7 @@ namespace opt {
             fmls.push_back(s.s);
         }       
         pb_util pb(m);
-        tmp = pb.mk_ge(weights.size(), weights.c_ptr(), fmls.c_ptr(), k);
+        tmp = pb.mk_ge(weights.size(), weights.data(), fmls.data(), k);
         TRACE("opt", tout << "cost: " << cost << "\n" << tmp << "\n";);
         s().assert_expr(tmp);
     }
@@ -126,14 +126,14 @@ namespace opt {
             wth->reset_local();
         }
         else {
-            wth = alloc(smt::theory_wmaxsat, m, m_c.fm());
+            wth = alloc(smt::theory_wmaxsat, m_c.smt_context(), m, m_c.fm());
             m_c.smt_context().register_plugin(wth);
         }
         smt::theory_id th_pb = m.get_family_id("pb");
         smt::theory_pb* pb = dynamic_cast<smt::theory_pb*>(m_c.smt_context().get_theory(th_pb));
         if (!pb) {
             theory_pb_params params;
-            pb = alloc(smt::theory_pb, m, params);
+            pb = alloc(smt::theory_pb, m_c.smt_context());
             m_c.smt_context().register_plugin(pb);
         }
         return wth;
@@ -171,8 +171,8 @@ namespace opt {
         if (is_sat != l_true) {
             return is_sat;
         }
-        for (unsigned i = 0; i < mutexes.size(); ++i) {
-            process_mutex(mutexes[i], new_soft);
+        for (auto& mux : mutexes) {
+            process_mutex(mux, new_soft);
         }
         return l_true;
     }
@@ -187,29 +187,28 @@ namespace opt {
 
     void maxsmt_solver_base::process_mutex(expr_ref_vector& mutex, obj_map<expr, rational>& new_soft) {
         TRACE("opt", 
-              for (unsigned i = 0; i < mutex.size(); ++i) {
-                  tout << mk_pp(mutex[i].get(), m) << " |-> " << new_soft.find(mutex[i].get()) << "\n";
+              for (expr* e : mutex) {
+                  tout << mk_pp(e, m) << " |-> " << new_soft.find(e) << "\n";
               });
         if (mutex.size() <= 1) {
             return;
         }
         maxsmt_compare_soft cmp(new_soft);
-        ptr_vector<expr> _mutex(mutex.size(), mutex.c_ptr());
+        ptr_vector<expr> _mutex(mutex.size(), mutex.data());
         std::sort(_mutex.begin(), _mutex.end(), cmp);
         mutex.reset();
-        mutex.append(_mutex.size(), _mutex.c_ptr());
+        mutex.append(_mutex.size(), _mutex.data());
 
         rational weight(0), sum1(0), sum2(0);
         vector<rational> weights;
-        for (unsigned i = 0; i < mutex.size(); ++i) {
-            rational w = new_soft.find(mutex[i].get());
+        for (expr* e : mutex) {
+            rational w = new_soft.find(e);
             weights.push_back(w);
             sum1 += w;
-            new_soft.remove(mutex[i].get());
+            new_soft.remove(e);
         }
-        for (unsigned i = mutex.size(); i > 0; ) {
-            --i;
-            expr_ref soft(m.mk_or(i+1, mutex.c_ptr()), m);
+        for (unsigned i = mutex.size(); i-- > 0; ) {
+            expr_ref soft(m.mk_or(i+1, mutex.data()), m);
             m_trail.push_back(soft);
             rational w = weights[i];
             weight = w - weight;
@@ -252,7 +251,8 @@ namespace opt {
             m_msolver = mk_sortmax(m_c, m_weights, m_soft_constraints);
         }
         else {
-            warning_msg("solver %s is not recognized, using default 'maxres'", maxsat_engine.str().c_str());
+            auto str = maxsat_engine.str();
+            warning_msg("solver %s is not recognized, using default 'maxres'", str.c_str());
             m_msolver = mk_maxres(m_c, m_index, m_weights, m_soft_constraints);
         }
 

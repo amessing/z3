@@ -107,7 +107,7 @@ static void pp_uninterp_sorts(std::ostream & out, ast_printer_context & ctx, mod
                 cname = mk_smt2_quoted_symbol(csym);
             else
                 cname = csym.str();
-            format * c_args[2] = { var, mk_string(m, cname.c_str()) };
+            format * c_args[2] = { var, mk_string(m, cname) };
             f_conds.push_back(mk_seq1<format**, f2f>(m, c_args, c_args+2, f2f(), "="));
         }
         SASSERT(!f_conds.empty());
@@ -194,10 +194,12 @@ static void pp_funs(std::ostream & out, ast_printer_context & ctx, model_core co
     ptr_buffer<format> f_entry_conds;
     ptr_buffer<func_decl> func_decls;
     sort_fun_decls(m, md, func_decls);
-    for (unsigned i = 0; i < func_decls.size(); i++) {
-        func_decl * f     = func_decls[i]; 
-        if (recfun_util.is_defined(f)) {
+    for (func_decl * f : func_decls) {
+        if (recfun_util.is_defined(f) && !recfun_util.is_generated(f)) {
             continue;
+        }
+        if (!m.is_considered_uninterpreted(f)) {
+            continue;            
         }
         func_interp * f_i = md.get_func_interp(f);
         SASSERT(f->get_arity() == f_i->get_arity());
@@ -208,7 +210,7 @@ static void pp_funs(std::ostream & out, ast_printer_context & ctx, model_core co
             for (unsigned j = 0; j < f->get_arity(); j++) {
                 std::stringstream strm;
                 strm << "x!" << (j+1);
-                var_names.push_back(symbol(strm.str().c_str()));
+                var_names.push_back(symbol(strm.str()));
             }
         }
         else {
@@ -216,8 +218,8 @@ static void pp_funs(std::ostream & out, ast_printer_context & ctx, model_core co
         }
         TRACE("model_smt2_pp", for (unsigned i = 0; i < var_names.size(); i++) tout << var_names[i] << "\n";);
         f_var_names.reset();
-        for (unsigned i = 0; i < f->get_arity(); i++)
-            f_var_names.push_back(mk_string(m, var_names[i].bare_str()));
+        for (auto const& vn : var_names) 
+            f_var_names.push_back(mk_string(m, vn.bare_str()));
         f_arg_decls.reset();
         for (unsigned i = 0; i < f->get_arity(); i++) {
             format_ref f_domain(fm(m));
@@ -261,7 +263,7 @@ static void pp_funs(std::ostream & out, ast_printer_context & ctx, model_core co
                                                                 body.get())));
             for (unsigned i = 0; i < f_i->num_entries(); i++)
                 f_entries.push_back(mk_string(m, ")"));
-            body = mk_compose(m, f_entries.size(), f_entries.c_ptr());
+            body = mk_compose(m, f_entries.size(), f_entries.data());
         }
         format_ref def(fm(m));
         std::string fname;
@@ -272,7 +274,7 @@ static void pp_funs(std::ostream & out, ast_printer_context & ctx, model_core co
         def = mk_indent(m, indent, mk_compose(m, 
                                               mk_compose(m, 
                                                          mk_string(m, "(define-fun "),
-                                                         mk_string(m, fname.c_str()),
+                                                         mk_string(m, fname),
                                                          mk_string(m, " "),
                                                          mk_compose(m, 
                                                                     f_domain,

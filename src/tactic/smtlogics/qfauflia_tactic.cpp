@@ -22,7 +22,8 @@ Notes:
 #include "tactic/arith/propagate_ineqs_tactic.h"
 #include "tactic/core/solve_eqs_tactic.h"
 #include "tactic/core/elim_uncnstr_tactic.h"
-#include "smt/tactic/smt_tactic.h"
+#include "tactic/smtlogics/smt_tactic.h"
+
 
 tactic * mk_qfauflia_tactic(ast_manager & m, params_ref const & p) {
     params_ref main_p;
@@ -30,10 +31,6 @@ tactic * mk_qfauflia_tactic(ast_manager & m, params_ref const & p) {
     main_p.set_bool("som", true);
     main_p.set_bool("sort_store", true);
     
-    params_ref ctx_simp_p;
-    ctx_simp_p.set_uint("max_depth", 30);
-    ctx_simp_p.set_uint("max_steps", 5000000);
-
     params_ref solver_p;
     solver_p.set_bool("array.simplify", false); // disable array simplifications at old_simplify module
 

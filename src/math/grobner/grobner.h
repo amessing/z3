@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef GROBNER_H_
-#define GROBNER_H_
+#pragma once
 
 #include "ast/ast.h"
 #include "ast/arith_decl_plugin.h"
@@ -68,7 +67,7 @@ public:
     public:
         unsigned get_num_monomials() const { return m_monomials.size(); }
         monomial const * get_monomial(unsigned idx) const { return m_monomials[idx]; }
-        monomial * const * get_monomials() const { return m_monomials.c_ptr(); }
+        monomial * const * get_monomials() const { return m_monomials.data(); }
         v_dependency * get_dependency() const { return m_dep; }
         unsigned hash() const { return m_bidx; }
         bool is_linear_combination() const { return m_lc; }
@@ -289,5 +288,4 @@ public:
     void display(std::ostream & out) const;
 };
 
-#endif /* GROBNER_H_ */
 

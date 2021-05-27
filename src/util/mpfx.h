@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef MPFX_H_
-#define MPFX_H_
+#pragma once
 
 #include "util/id_gen.h"
 #include "util/util.h"
@@ -51,7 +50,7 @@ class mpz;
 class mpq;
 template<bool SYNCH> class mpz_manager;
 template<bool SYNCH> class mpq_manager;
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
 typedef mpz_manager<true>  synch_mpz_manager;
 typedef mpq_manager<true>  synch_mpq_manager;
 #else
@@ -82,16 +81,16 @@ class mpfx_manager {
     unsigned          m_int_part_sz;
     unsigned          m_frac_part_sz;
     unsigned          m_total_sz;       //!< == m_int_part_sz + m_frac_part_sz
-    unsigned_vector   m_words;          //!< Array containing all words
+    mutable unsigned_vector   m_words;          //!< Array containing all words
     unsigned          m_capacity;       //!< Number of mpfx numerals that can be stored in m_words.
     bool              m_to_plus_inf;    //!< If True, then round to plus infinity, otherwise to minus infinity
     id_gen            m_id_gen;
-    unsigned_vector   m_buffer0, m_buffer1, m_buffer2;
+    mutable unsigned_vector   m_buffer0, m_buffer1, m_buffer2;
     unsigned_vector   m_tmp_digits;
     mpfx              m_one;
     mpn_manager       m_mpn_manager;
 
-    unsigned * words(mpfx const & n) const { return m_words.c_ptr() + (n.m_sig_idx * m_total_sz); }
+    unsigned * words(mpfx const & n) const { return m_words.data() + (n.m_sig_idx * m_total_sz); }
     unsigned sz(unsigned * ws) const;
 
     void ensure_capacity(unsigned sig_idx) {
@@ -318,7 +317,7 @@ public:
     void set(mpfx & n, mpfx const & v);
     void set(mpfx & n, unsynch_mpz_manager & m, mpz const & v);
     void set(mpfx & n, unsynch_mpq_manager & m, mpq const & v);
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     void set(mpfx & n, synch_mpz_manager & m, mpz const & v);
     void set(mpfx & n, synch_mpq_manager & m, mpq const & v);
 #endif
@@ -366,7 +365,7 @@ public:
     */
     void to_mpz(mpfx const & n, unsynch_mpz_manager & m, mpz & t);
 
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     /**
        \brief Convert n into a mpz numeral.
        
@@ -380,7 +379,7 @@ public:
     */
     void to_mpq(mpfx const & n, unsynch_mpq_manager & m, mpq & t);
 
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     /**
        \brief Convert n into a mpq numeral.
     */
@@ -409,4 +408,3 @@ public:
 typedef _scoped_numeral<mpfx_manager> scoped_mpfx;
 typedef _scoped_numeral_vector<mpfx_manager> scoped_mpfx_vector;
 
-#endif

@@ -16,8 +16,7 @@ Author:
 Notes:
 
 --*/
-#ifndef SOLVER_H_
-#define SOLVER_H_
+#pragma once
 
 #include "solver/check_sat_result.h"
 #include "solver/progress_callback.h"
@@ -26,11 +25,16 @@ Notes:
 class solver;
 class model_converter;
 
+
 class solver_factory {
 public:
     virtual ~solver_factory() {}
     virtual solver * operator()(ast_manager & m, params_ref const & p, bool proofs_enabled, bool models_enabled, bool unsat_core_enabled, symbol const & logic) = 0;
 };
+
+solver_factory * mk_smt_strategic_solver_factory(symbol const & logic = symbol::null);
+
+solver* mk_smt2_solver(ast_manager& m, params_ref const& p);
 
 /**
    \brief Abstract interface for making solvers available in the Z3
@@ -107,6 +111,16 @@ public:
         for (expr* e : ts) assert_expr(e);
     }
 
+    virtual void set_phase(expr* e) = 0;
+    virtual void move_to_front(expr* e) = 0; 
+
+    class phase { public: virtual ~phase() {} };
+    
+    virtual phase* get_phase() = 0;
+
+    virtual void set_phase(phase* p) = 0;
+
+
     void assert_expr(ptr_vector<expr> const& ts) { 
         for (expr* e : ts) assert_expr(e);
     }
@@ -144,9 +158,9 @@ public:
 
     lbool check_sat(unsigned num_assumptions, expr * const * assumptions);
 
-    lbool check_sat(expr_ref_vector const& asms) { return check_sat(asms.size(), asms.c_ptr()); }
+    lbool check_sat(expr_ref_vector const& asms) { return check_sat(asms.size(), asms.data()); }
     
-    lbool check_sat(app_ref_vector const& asms) { return check_sat(asms.size(), (expr* const*)asms.c_ptr()); }
+    lbool check_sat(app_ref_vector const& asms) { return check_sat(asms.size(), (expr* const*)asms.data()); }
 
     lbool check_sat() { return check_sat(0, nullptr); }
 
@@ -157,8 +171,9 @@ public:
        assumed for the check.
     */
     virtual lbool check_sat_cc(expr_ref_vector const& cube, vector<expr_ref_vector> const& clauses) {
-        if (clauses.empty()) return check_sat(cube.size(), cube.c_ptr());
+        if (clauses.empty()) return check_sat(cube.size(), cube.data());
         NOT_IMPLEMENTED_YET();
+        return l_undef;
     }
 
     /**
@@ -224,6 +239,52 @@ public:
 
     virtual expr_ref_vector cube(expr_ref_vector& vars, unsigned backtrack_level) = 0;
 
+
+    class propagate_callback {
+    public:
+        virtual void propagate_cb(unsigned num_fixed, unsigned const* fixed_ids, unsigned num_eqs, unsigned const* eq_lhs, unsigned const* eq_rhs, expr* conseq) = 0;
+    };
+    class context_obj {
+    public:
+        virtual ~context_obj() {}
+    };
+    typedef std::function<void(void*, solver::propagate_callback*)> final_eh_t;
+    typedef std::function<void(void*, solver::propagate_callback*, unsigned, expr*)> fixed_eh_t;
+    typedef std::function<void(void*, solver::propagate_callback*, unsigned, unsigned)> eq_eh_t;
+    typedef std::function<void*(void*, ast_manager&, solver::context_obj*&)> fresh_eh_t;
+    typedef std::function<void(void*)>                 push_eh_t;
+    typedef std::function<void(void*,unsigned)>        pop_eh_t;
+
+    virtual void user_propagate_init(
+        void* ctx, 
+        push_eh_t&                                   push_eh,
+        pop_eh_t&                                    pop_eh,
+        fresh_eh_t&                                  fresh_eh) {
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+
+    virtual void user_propagate_register_fixed(fixed_eh_t& fixed_eh) {
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+    virtual void user_propagate_register_final(final_eh_t& final_eh) {
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+    virtual void user_propagate_register_eq(eq_eh_t& eq_eh) {
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+    virtual void user_propagate_register_diseq(eq_eh_t& diseq_eh) {
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+    virtual unsigned user_propagate_register(expr* e) { 
+        throw default_exception("user-propagators are only supported on the SMT solver");
+    }
+
+
     /**
        \brief Display the content of this solver.
     */
@@ -232,7 +293,7 @@ public:
     /**
        \brief Display the content of this solver in DIMACS format
     */
-    std::ostream& display_dimacs(std::ostream & out) const;
+    std::ostream& display_dimacs(std::ostream & out, bool include_names = true) const;
 
     /**
        \brief expose model converter when solver produces partially reduced set of assertions.
@@ -250,8 +311,6 @@ public:
     virtual expr_ref_vector get_trail() = 0; // { return expr_ref_vector(get_manager()); }
     
     virtual void get_levels(ptr_vector<expr> const& vars, unsigned_vector& depth) = 0;
-
-    virtual void set_activity(expr* lit, double activity) = 0;
 
     class scoped_push {
         solver& s;
@@ -281,4 +340,3 @@ inline std::ostream& operator<<(std::ostream& out, solver const& s) {
     return s.display(out);
 }
 
-#endif

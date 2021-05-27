@@ -20,8 +20,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef MPFF_H_
-#define MPFF_H_
+#pragma once
 
 #include "util/id_gen.h"
 #include "util/util.h"
@@ -58,7 +57,7 @@ class mpz;
 class mpq;
 template<bool SYNCH> class mpz_manager;
 template<bool SYNCH> class mpq_manager;
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
 typedef mpz_manager<true>  synch_mpz_manager;
 typedef mpq_manager<true>  synch_mpq_manager;
 #else
@@ -113,7 +112,7 @@ class mpff_manager {
     
     unsigned          m_precision;      //!< Number of words in the significand. Must be an even number.
     unsigned          m_precision_bits; //!< Number of bits in the significand.  Must be 32*m_precision.
-    unsigned_vector   m_significands;   //!< Array containing all significands.
+    mutable unsigned_vector   m_significands;   //!< Array containing all significands.
     unsigned          m_capacity;       //!< Number of significands that can be stored in m_significands.
     bool              m_to_plus_inf;    //!< If True, then round to plus infinity, otherwise to minus infinity
     id_gen            m_id_gen;
@@ -123,7 +122,7 @@ class mpff_manager {
     mpff              m_one;
     mpn_manager       m_mpn_manager;
 
-    unsigned * sig(mpff const & n) const { return m_significands.c_ptr() + (n.m_sig_idx * m_precision); }
+    unsigned * sig(mpff const & n) const { return m_significands.data() + (n.m_sig_idx * m_precision); }
     
     void ensure_capacity(unsigned sig_idx) {
         while (sig_idx >= m_capacity) 
@@ -218,7 +217,7 @@ public:
        \brief Return the significand as a mpz numeral.
     */
     void significand(mpff const & n, unsynch_mpz_manager & m, mpz & r);
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     void significand(mpff const & n, synch_mpz_manager & m, mpz & r);
 #endif
 
@@ -386,7 +385,7 @@ public:
     void set(mpff & n, mpff const & v);
     void set(mpff & n, unsynch_mpz_manager & m, mpz const & v);
     void set(mpff & n, unsynch_mpq_manager & m, mpq const & v);
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     void set(mpff & n, synch_mpq_manager & m, mpq const & v);
     void set(mpff & n, synch_mpz_manager & m, mpz const & v);
 #endif
@@ -429,7 +428,7 @@ public:
     */
     void to_mpz(mpff const & n, unsynch_mpz_manager & m, mpz & t);
 
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     /**
        \brief Convert n into a mpz numeral.
        
@@ -440,6 +439,7 @@ public:
     void to_mpz(mpff const & n, synch_mpz_manager & m, mpz & t);
 #endif
 
+
     /**
        \brief Convert n into a mpq numeral.
 
@@ -447,7 +447,7 @@ public:
     */
     void to_mpq(mpff const & n, unsynch_mpq_manager & m, mpq & t);
 
-#ifndef _NO_OMP_
+#ifndef SINGLE_THREAD
     /**
        \brief Convert n into a mpq numeral.
 
@@ -492,4 +492,3 @@ public:
 typedef _scoped_numeral<mpff_manager> scoped_mpff;
 typedef _scoped_numeral_vector<mpff_manager> scoped_mpff_vector;
 
-#endif

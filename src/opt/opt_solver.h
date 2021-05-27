@@ -18,8 +18,7 @@ Notes:
     Based directly on smt_solver.
    
 --*/
-#ifndef OPT_SOLVER_H_
-#define OPT_SOLVER_H_
+#pragma once
 
 #include "util/inf_rational.h"
 #include "util/inf_eps_rational.h"
@@ -73,12 +72,11 @@ namespace opt {
         generic_model_converter& m_fm;
         progress_callback * m_callback;
         symbol              m_logic;
-        model_ref           m_model;
+        model_ref           m_last_model;
         svector<smt::theory_var>  m_objective_vars;
         vector<inf_eps>     m_objective_values;
         sref_vector<model>  m_models;
         expr_ref_vector     m_objective_terms;
-        svector<bool>       m_valid_objectives;
         bool                m_dump_benchmarks;
         static unsigned     m_dump_count;
         statistics          m_stats;
@@ -110,21 +108,21 @@ namespace opt {
         lbool preferred_sat(expr_ref_vector const& asms, vector<expr_ref_vector>& cores) override;
         void get_levels(ptr_vector<expr> const& vars, unsigned_vector& depth) override; 
         expr_ref_vector get_trail() override { return m_context.get_trail(); }
-        void set_activity(expr* lit, double act) override { m_context.set_activity(lit, act); }
         expr_ref_vector cube(expr_ref_vector&, unsigned) override { return expr_ref_vector(m); }
+        void set_phase(expr* e) override { m_context.set_phase(e); }
+        phase* get_phase() override { return m_context.get_phase(); }
+        void set_phase(phase* p) override { m_context.set_phase(p); }
+        void move_to_front(expr* e) override { m_context.move_to_front(e); }
 
         void set_logic(symbol const& logic);
 
         smt::theory_var add_objective(app* term);
         void reset_objectives();
-        void maximize_objective(unsigned i, expr_ref& blocker);
-        void maximize_objectives(expr_ref_vector& blockers);
+        bool maximize_objective(unsigned i, expr_ref& blocker);
+        bool maximize_objectives1(expr_ref_vector& blockers);
         inf_eps const & saved_objective_value(unsigned obj_index);
         inf_eps current_objective_value(unsigned obj_index);
         model* get_model_idx(unsigned obj_index) { return m_models[obj_index]; }
-        bool objective_is_model_valid(unsigned obj_index) const {
-            return m_valid_objectives[obj_index];
-        }
 
         bool was_unknown() const { return m_was_unknown; }
 
@@ -145,10 +143,9 @@ namespace opt {
                                symbol const& logic = symbol::null, char const * status = "unknown", char const * attributes = "");
 
     private:
-        lbool decrement_value(unsigned i, inf_eps& val);
+        bool bound_value(unsigned i, inf_eps& val);
         void set_model(unsigned i);
         lbool adjust_result(lbool r);
     };
 }
 
-#endif

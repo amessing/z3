@@ -16,13 +16,8 @@ Author:
 Revision History:
 
 --*/
-#ifndef DL_CONTEXT_H_
-#define DL_CONTEXT_H_
+#pragma once
 
-#ifdef _CYGWIN
-#undef min
-#undef max
-#endif
 #include "ast/arith_decl_plugin.h"
 #include "util/map.h"
 #include "ast/rewriter/th_rewriter.h"
@@ -99,8 +94,8 @@ namespace datalog {
         relation_fact(ast_manager & m, unsigned sz) : app_ref_vector(m) { resize(sz); }
         relation_fact(context & ctx);
 
-        iterator begin() const { return c_ptr(); }
-        iterator end() const { return c_ptr()+size(); }
+        iterator begin() const { return data(); }
+        iterator end() const { return data()+size(); }
 
         relation_element operator[](unsigned i) const { return get(i); }
         el_proxy operator[](unsigned i) { return el_proxy(*this, i); }
@@ -181,7 +176,7 @@ namespace datalog {
         contains_pred      m_contains_p;
         rule_properties    m_rule_properties;
         rule_transformer   m_transf;
-        trail_stack<context> m_trail;
+        trail_stack        m_trail;
         ast_ref_vector     m_pinned;
         bind_variables     m_bind_variables;
         sort_domain_map    m_sorts;
@@ -231,13 +226,13 @@ namespace datalog {
         bool saturation_was_run() const { return m_saturation_was_run; }
         void notify_saturation_was_run() { m_saturation_was_run = true; }
 
-        void configure_engine();
+        void configure_engine(expr* e);
 
         ast_manager & get_manager() const { return m; }
         rule_manager & get_rule_manager() { return m_rule_manager; }
         smt_params & get_fparams() const { return m_fparams; }
         fp_params const&  get_params() const { return *m_params; }
-        DL_ENGINE get_engine() { configure_engine(); return m_engine_type; }
+        DL_ENGINE get_engine(expr* e = nullptr) { configure_engine(e); return m_engine_type; }
         register_engine_base& get_register_engine() { return m_register_engine; }
         th_rewriter& get_rewriter() { return m_rewriter; }
         var_subst & get_var_subst() { return m_var_subst; }
@@ -501,7 +496,7 @@ namespace datalog {
         // -----------------------------------
 
         bool canceled() {
-            return m.canceled() && (m_last_status = CANCELED, true);
+            return !m.inc() && (m_last_status = CANCELED, true);
         }
 
         void cleanup();
@@ -531,6 +526,8 @@ namespace datalog {
            for PDR mode and Duality mode.
          */
         model_ref get_model();
+
+        bool is_monotone();
 
         /**
            \brief retrieve proof from derivation of the query.
@@ -610,10 +607,9 @@ namespace datalog {
         */
         void reset_tables();
 
-
         void flush_add_rules();
 
-        void ensure_engine();
+        void ensure_engine(expr* e = nullptr);
 
         // auxiliary functions for SMT2 pretty-printer.
         void declare_vars(expr_ref_vector& rules, mk_fresh_name& mk_fresh, std::ostream& out);
@@ -628,4 +624,3 @@ namespace datalog {
 
 };
 
-#endif /* DL_CONTEXT_H_ */

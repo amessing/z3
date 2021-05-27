@@ -25,6 +25,10 @@ Revision History:
 #include "util/vector.h"
 
 #ifdef _WINDOWS
+#if defined( __MINGW32__ ) && ( defined( __GNUG__ ) || defined( __clang__ ) )
+#include <crtdbg.h>
+#endif
+
 #define VPRF vsprintf_s
 
 void STD_CALL myInvalidParameterHandler(
@@ -95,10 +99,10 @@ void format2ostream(std::ostream & out, char const* msg, va_list args) {
     // +1 is for NUL termination.
     buff.resize(static_cast<unsigned>(msg_len + 1));
 
-    VPRF(buff.c_ptr(), buff.size(), msg, args);
+    VPRF(buff.data(), buff.size(), msg, args);
 
     END_ERR_HANDLER();
-    out << buff.c_ptr();
+    out << buff.data();
 }
 
 

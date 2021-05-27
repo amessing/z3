@@ -18,8 +18,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef SAT_SIMPLIFIER_H_
-#define SAT_SIMPLIFIER_H_
+#pragma once
 
 #include "sat/sat_types.h"
 #include "sat/sat_clause.h"
@@ -31,6 +30,10 @@ Revision History:
 #include "util/heap.h"
 #include "util/statistics.h"
 #include "util/params.h"
+
+namespace pb {
+    class solver;
+}
 
 namespace sat {
     class solver;
@@ -51,7 +54,7 @@ namespace sat {
     };
 
     class simplifier {
-        friend class ba_solver;
+        friend class pb::solver;
         friend class elim_vars;
         solver &               s;
         unsigned               m_num_calls;
@@ -127,7 +130,7 @@ namespace sat {
         void init_visited();
         void mark_visited(literal l) { m_visited[l.index()] = true; }
         void unmark_visited(literal l) { m_visited[l.index()] = false; }
-        bool is_marked(literal l) const { return m_visited[l.index()] != 0; }
+        
         void mark_all_but(clause const & c, literal l);
         void unmark_all(clause const & c);
 
@@ -240,7 +243,8 @@ namespace sat {
         void propagate_unit(literal l);
         void subsume();
 
+        bool is_marked(literal l) const { return m_visited[l.index()] != 0; }
+
     };
 };
 
-#endif

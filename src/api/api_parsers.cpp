@@ -25,7 +25,6 @@ Revision History:
 #include "smt/smt_solver.h"
 #include "parsers/smt2/smt2parser.h"
 #include "solver/solver_na2as.h"
-#include "tactic/portfolio/smt_strategic_solver.h"
 
 
 extern "C" {
@@ -43,6 +42,7 @@ extern "C" {
         Z3_TRY;
         ast_manager& m = mk_c(c)->m();
         scoped_ptr<cmd_context> ctx = alloc(cmd_context, false, &(m));
+        ctx->register_plist();
         ctx->set_ignore_check(true);
         Z3_ast_vector_ref * v = alloc(Z3_ast_vector_ref, *mk_c(c), m);
         
@@ -91,17 +91,17 @@ extern "C" {
         try {
             if (!parse_smt2_commands(*ctx.get(), is)) {
                 ctx = nullptr;
-                SET_ERROR_CODE(Z3_PARSER_ERROR, errstrm.str().c_str());
+                SET_ERROR_CODE(Z3_PARSER_ERROR, errstrm.str());
                 return of_ast_vector(v);
             }
         }
         catch (z3_exception& e) {
             errstrm << e.msg();
             ctx = nullptr;
-            SET_ERROR_CODE(Z3_PARSER_ERROR, errstrm.str().c_str());
+            SET_ERROR_CODE(Z3_PARSER_ERROR, errstrm.str());
             return of_ast_vector(v);
         }
-        for (expr * e : ctx->assertions()) {
+        for (expr* e : ctx->tracked_assertions()) {
             v->m_ast_vector.push_back(e);
         }
         return of_ast_vector(v);
@@ -158,13 +158,13 @@ extern "C" {
         ctx->set_diagnostic_stream(ous);
         try {
             if (!parse_smt2_commands(*ctx.get(), is)) {
-                SET_ERROR_CODE(Z3_PARSER_ERROR, ous.str().c_str());
+                SET_ERROR_CODE(Z3_PARSER_ERROR, ous.str());
                 RETURN_Z3(mk_c(c)->mk_external_string(ous.str()));
             }
         }
         catch (z3_exception& e) {
             if (ous.str().empty()) ous << e.msg();
-            SET_ERROR_CODE(Z3_PARSER_ERROR, ous.str().c_str());
+            SET_ERROR_CODE(Z3_PARSER_ERROR, ous.str());
             RETURN_Z3(mk_c(c)->mk_external_string(ous.str()));
         }
         RETURN_Z3(mk_c(c)->mk_external_string(ous.str()));

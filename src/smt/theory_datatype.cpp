@@ -23,6 +23,7 @@ Revision History:
 #include "ast/ast_smt2_pp.h"
 #include "smt/smt_context.h"
 #include "smt/theory_datatype.h"
+#include "smt/theory_array.h"
 #include "smt/smt_model_generator.h"
 
 namespace smt {
@@ -45,14 +46,15 @@ namespace smt {
     }
 
     theory_datatype::final_check_st::~final_check_st() {
-        unmark_enodes(th->m_to_unmark.size(), th->m_to_unmark.c_ptr());
-        unmark_enodes2(th->m_to_unmark2.size(), th->m_to_unmark2.c_ptr());
-        th->m_to_unmark.reset();
-        th->m_to_unmark2.reset();
-        th->m_used_eqs.reset();
-        th->m_stack.reset();
-        th->m_parent.reset();
-    }   
+        th->clear_mark();
+    }
+
+    void theory_datatype::clear_mark() {
+        unmark_enodes(m_to_unmark.size(), m_to_unmark.data());
+        unmark_enodes2(m_to_unmark2.size(), m_to_unmark2.data());
+        m_to_unmark.reset();
+        m_to_unmark2.reset();
+    }
     
     void theory_datatype::oc_mark_on_stack(enode * n) {
         n = n->get_root();
@@ -73,7 +75,7 @@ namespace smt {
 
 
     theory* theory_datatype::mk_fresh(context* new_ctx) { 
-        return alloc(theory_datatype, new_ctx->get_manager(), m_params); 
+        return alloc(theory_datatype, *new_ctx);
     }
 
     /**
@@ -81,10 +83,19 @@ namespace smt {
        antecedent may be null_literal
     */
     void theory_datatype::assert_eq_axiom(enode * lhs, expr * rhs, literal antecedent) {
-        ast_manager & m   = get_manager();
-        context & ctx     = get_context();
+
+        if (antecedent != null_literal) {
+            std::function<void(void)> fn = [&]() {
+                app_ref body(m);
+                body = m.mk_eq(lhs->get_expr(), rhs);
+                body = m.mk_implies(ctx.bool_var2expr(antecedent.var()), body);                
+                log_axiom_instantiation(body, 1, &lhs);
+            };
+            scoped_trace_stream _st(m, fn);
+        }
+
         if (m.proofs_enabled()) {
-            literal l(mk_eq(lhs->get_owner(), rhs, true));
+            literal l(mk_eq(lhs->get_expr(), rhs, true));
             ctx.mark_as_relevant(l);
             if (antecedent != null_literal) {
                 literal lits[2] = {l, ~antecedent};
@@ -97,12 +108,12 @@ namespace smt {
         }
         else {
             ctx.internalize(rhs, false);
-            TRACE("datatype", tout << "adding axiom:\n" << mk_pp(lhs->get_owner(), m) << "\n=\n" << mk_pp(rhs, m) << "\n";);
+            TRACE("datatype", tout << "adding axiom:\n" << pp(lhs, m) << "\n=\n" << mk_pp(rhs, m) << "\n";);
             if (antecedent == null_literal) {
                 ctx.assign_eq(lhs, ctx.get_enode(rhs), eq_justification::mk_axiom());
             }
             else if (ctx.get_assignment(antecedent) != l_true) {
-                literal l(mk_eq(lhs->get_owner(), rhs, true));
+                literal l(mk_eq(lhs->get_expr(), rhs, true));
                 ctx.mark_as_relevant(l);
                 ctx.mark_as_relevant(antecedent);
                 literal lits[2] = {l, ~antecedent};
@@ -126,30 +137,24 @@ namespace smt {
        where acc_i are the accessors of constructor c.
     */
     void theory_datatype::assert_is_constructor_axiom(enode * n, func_decl * c, literal antecedent) {
-        TRACE("datatype_bug", tout << "creating axiom (= n (c (acc_1 n) ... (acc_m n))) for\n" << mk_pp(n->get_owner(), get_manager()) << "\n";);
+        app* e = n->get_expr();
+        TRACE("datatype_bug", tout << "creating axiom (= n (c (acc_1 n) ... (acc_m n))) for\n" 
+            << mk_pp(c, m) << " " << mk_pp(e, m) << "\n";);
         m_stats.m_assert_cnstr++;
         SASSERT(m_util.is_constructor(c));
-        SASSERT(m_util.is_datatype(get_manager().get_sort(n->get_owner())));
-        ast_manager & m = get_manager();
+        SASSERT(m_util.is_datatype(e->get_sort()));
+
+        SASSERT(c->get_range() == e->get_sort());
         ptr_vector<expr> args;
-        ptr_vector<func_decl> const & accessors   = *m_util.get_constructor_accessors(c);
+        ptr_vector<func_decl> const & accessors = *m_util.get_constructor_accessors(c);
         SASSERT(c->get_arity() == accessors.size());
         for (func_decl * d : accessors) {
             SASSERT(d->get_arity() == 1);
-            expr * acc    = m.mk_app(d, n->get_owner());
-            args.push_back(acc);
+            args.push_back(m.mk_app(d, e));
         }
-        expr_ref mk(m.mk_app(c, args.size(), args.c_ptr()), m);
-        if (m.has_trace_stream()) {
-            app_ref body(m);
-            body = m.mk_eq(n->get_owner(), mk);
-            if (antecedent != null_literal) {
-                body = m.mk_implies(get_context().bool_var2expr(antecedent.var()), body);
-            }
-            log_axiom_instantiation(body, 1, &n);
-        }
+        expr_ref mk(m.mk_app(c, args), m);
+
         assert_eq_axiom(n, mk, antecedent);
-        if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
     }
 
     /**
@@ -162,7 +167,6 @@ namespace smt {
         m_stats.m_assert_accessor++;
 
         SASSERT(is_constructor(n));
-        ast_manager & m   = get_manager();
         func_decl * d     = n->get_decl();
         ptr_vector<func_decl> const & accessors   = *m_util.get_constructor_accessors(d);
         SASSERT(n->get_num_args() == accessors.size());
@@ -170,20 +174,21 @@ namespace smt {
         vector<std::tuple<enode *, enode *>> used_enodes;
         used_enodes.push_back(std::make_tuple(nullptr, n));
         for (unsigned i = 0; i < n->get_num_args(); ++i) {
-            bindings.push_back(n->get_arg(i)->get_owner());
+            bindings.push_back(n->get_arg(i)->get_expr());
         }
-        unsigned base_id = get_manager().has_trace_stream() && accessors.size() > 0 ? m_util.get_plugin()->get_axiom_base_id(d->get_name()) : 0;
+        unsigned base_id = m.has_trace_stream() && accessors.size() > 0 ? m_util.plugin().get_axiom_base_id(d->get_name()) : 0;
         unsigned i = 0;
         for (func_decl * acc : accessors) {
-            app_ref acc_app(m.mk_app(acc, n->get_owner()), m);
+            app_ref acc_app(m.mk_app(acc, n->get_expr()), m);
             enode * arg       = n->get_arg(i);
-            if (m.has_trace_stream()) {
+
+            std::function<void(void)> fn = [&]() {
                 app_ref body(m);
-                body = m.mk_eq(arg->get_owner(), acc_app);
-                log_axiom_instantiation(body, base_id + 3*i, bindings.size(), bindings.c_ptr(), base_id - 3, used_enodes);
-            }
+                body = m.mk_eq(arg->get_expr(), acc_app);
+                log_axiom_instantiation(body, base_id + 3*i, bindings.size(), bindings.data(), base_id - 3, used_enodes);
+            };
+            scoped_trace_stream _st(m, fn);
             assert_eq_axiom(arg, acc_app, null_literal);
-            if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
             ++i;
         }
     }
@@ -197,14 +202,14 @@ namespace smt {
         SASSERT(m_util.get_recognizer_constructor(r->get_decl()) == c->get_decl());
         SASSERT(c->get_root() == r->get_arg(0)->get_root());
         TRACE("recognizer_conflict",
-              tout << mk_ismt2_pp(c->get_owner(), get_manager()) << "\n" << mk_ismt2_pp(r->get_owner(), get_manager()) << "\n";);
-        context & ctx = get_context();
+              tout << mk_ismt2_pp(c->get_expr(), m) << "\n" << mk_ismt2_pp(r->get_expr(), m) << "\n";);
         literal l(ctx.enode2bool_var(r));
         SASSERT(ctx.get_assignment(l) == l_false);
         l.neg();
         SASSERT(ctx.get_assignment(l) == l_true);
         enode_pair p(c, r->get_arg(0));
         region & reg = ctx.get_region();
+        clear_mark();
         ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), reg, 1, &l, 1, &p)));
     }
 
@@ -213,13 +218,12 @@ namespace smt {
        (=> (is-C r) (= (acc_j n) (acc_j r))) for acc_j != field
        (=> (is-C r) (= (field n) v))         for acc_j != field
        (=> (not (is-C r)) (= n r))
+       (=> (is-C r) (is-C n))
     */
     void theory_datatype::assert_update_field_axioms(enode * n) {
         m_stats.m_assert_update_field++;
         SASSERT(is_update_field(n));
-        context & ctx = get_context();
-        ast_manager & m  = get_manager();
-        app*        own  = n->get_owner();
+        app*        own  = n->get_expr();
         expr*       arg1 = own->get_arg(0);
         func_decl * upd  = n->get_decl();
         func_decl * acc  = to_func_decl(upd->get_parameter(0).get_ast());
@@ -227,32 +231,32 @@ namespace smt {
         func_decl * rec  = m_util.get_constructor_is(con);
         ptr_vector<func_decl> const & accessors = *m_util.get_constructor_accessors(con);
         app_ref rec_app(m.mk_app(rec, arg1), m);
+        app_ref acc_app(m);
         ctx.internalize(rec_app, false);
-        literal is_con(ctx.get_bool_var(rec_app));
+        literal is_con(ctx.get_bool_var(rec_app));        
         for (func_decl* acc1 : accessors) {
             enode* arg;
             if (acc1 == acc) {
                 arg = n->get_arg(1);
             }
             else {
-                app* acc_app = m.mk_app(acc1, arg1);
+                acc_app = m.mk_app(acc1, arg1);
                 ctx.internalize(acc_app, false);
                 arg = ctx.get_enode(acc_app);
             }
             app_ref acc_own(m.mk_app(acc1, own), m);
-            if (m.has_trace_stream()) {
-                app_ref body(m);
-                body = m.mk_implies(rec_app, m.mk_eq(arg->get_owner(), acc_own));
-                log_axiom_instantiation(body, 1, &n);
-            }
             assert_eq_axiom(arg, acc_own, is_con); 
-            if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
         }
         // update_field is identity if 'n' is not created by a matching constructor.        
-        app_ref imp(m.mk_implies(m.mk_not(rec_app), m.mk_eq(n->get_owner(), arg1)), m);
-        if (m.has_trace_stream()) log_axiom_instantiation(imp, 1, &n);
+        app_ref imp(m.mk_implies(m.mk_not(rec_app), m.mk_eq(n->get_expr(), arg1)), m);
         assert_eq_axiom(n, arg1, ~is_con);
-        if (m.has_trace_stream()) m.trace_stream() << "[end-of-instance]\n";
+
+        app_ref n_is_con(m.mk_app(rec, own), m);
+        ctx.internalize(n_is_con, false);
+        literal lits[2] = { ~is_con, literal(ctx.get_bool_var(n_is_con)) };
+        std::function<literal_vector(void)> fn = [&]() { return literal_vector(2, lits); };
+        scoped_trace_stream _st(*this, fn);
+        ctx.mk_th_axiom(get_id(), 2, lits);
     }
 
     theory_var theory_datatype::mk_var(enode * n) {
@@ -261,7 +265,6 @@ namespace smt {
         SASSERT(r == static_cast<int>(m_var_data.size()));
         m_var_data.push_back(alloc(var_data));
         var_data * d  = m_var_data[r];
-        context & ctx   = get_context();
         ctx.attach_th_var(n, this, r);
         if (is_constructor(n)) {
             d->m_constructor = n;
@@ -271,14 +274,13 @@ namespace smt {
             assert_update_field_axioms(n);
         }
         else {
-            ast_manager & m = get_manager();
-            sort * s      = m.get_sort(n->get_owner());
+            sort * s      = n->get_sort();
             if (m_util.get_datatype_num_constructors(s) == 1) {
                 func_decl * c = m_util.get_datatype_constructors(s)->get(0);
                 assert_is_constructor_axiom(n, c, null_literal);
             }
             else {
-                if (m_params.m_dt_lazy_splits == 0 || (m_params.m_dt_lazy_splits == 1 && !s->is_infinite()))
+                if (params().m_dt_lazy_splits == 0 || (params().m_dt_lazy_splits == 1 && !s->is_infinite()))
                     mk_split(r);
             }
         }
@@ -286,21 +288,21 @@ namespace smt {
     }
 
     bool theory_datatype::internalize_atom(app * atom, bool gate_ctx) {
-        TRACE("datatype", tout << "internalizing atom:\n" << mk_pp(atom, get_manager()) << "\n";);
+        TRACE("datatype", tout << "internalizing atom:\n" << mk_pp(atom, m) << "\n";);
         return internalize_term(atom);
     }
 
     bool theory_datatype::internalize_term(app * term) {
-        TRACE("datatype", tout << "internalizing term:\n" << mk_pp(term, get_manager()) << "\n";);
-        context & ctx     = get_context();
+        force_push();
+        TRACE("datatype", tout << "internalizing term:\n" << mk_pp(term, m) << "\n";);
         unsigned num_args = term->get_num_args();
         for (unsigned i = 0; i < num_args; i++)
             ctx.internalize(term->get_arg(i), false);
         // the internalization of the arguments may trigger the internalization of term.
         if (ctx.e_internalized(term))
             return true;
-        enode * e       = ctx.mk_enode(term, false, get_manager().is_bool(term), true); // possible optimization, the third argument may be set to false, if the term (actually, atom) is not in the context of a gate.
-        if (get_manager().is_bool(term)) {
+        enode * e       = ctx.mk_enode(term, false, m.is_bool(term), true); // possible optimization, the third argument may be set to false, if the term (actually, atom) is not in the context of a gate.
+        if (m.is_bool(term)) {
             bool_var bv = ctx.mk_bool_var(term);
             ctx.set_var_theory(bv, get_id());
             ctx.set_enode_flag(bv, true);
@@ -331,7 +333,14 @@ namespace smt {
             //
             for (unsigned i = 0; i < num_args; i++) {
                 enode * arg = e->get_arg(i);
-                sort * s    = get_manager().get_sort(arg->get_owner());
+                sort * s    = arg->get_sort();
+                if (m_autil.is_array(s) && m_util.is_datatype(get_array_range(s))) {
+                    app_ref def(m_autil.mk_default(arg->get_expr()), m);
+                    if (!ctx.e_internalized(def)) {
+                        ctx.internalize(def, false);
+                    }
+                    arg = ctx.get_enode(def);       
+                }
                 if (!m_util.is_datatype(s))
                     continue;
                 if (is_attached_to_var(arg))
@@ -360,6 +369,7 @@ namespace smt {
     }
 
     void theory_datatype::apply_sort_cnstr(enode * n, sort * s) {
+        force_push();
         // Remark: If s is an infinite sort, then it is not necessary to create
         // a theory variable. 
         // 
@@ -371,14 +381,24 @@ namespace smt {
         //   (assert (> (len a) 1)
         //   
         // If the theory variable is not created for 'a', then a wrong model will be generated.
-        TRACE("datatype", tout << "apply_sort_cnstr: #" << n->get_owner_id() << "\n";);
-        TRACE("datatype_bug", tout << "apply_sort_cnstr:\n" << mk_pp(n->get_owner(), get_manager()) << "\n";);
-        if ((get_context().has_quantifiers() || (m_util.is_datatype(s) && !s->is_infinite())) && !is_attached_to_var(n)) {
+        TRACE("datatype", tout << "apply_sort_cnstr: #" << n->get_owner_id() << " " << pp(n, m) << "\n";);
+        TRACE("datatype_bug", 
+              tout << "apply_sort_cnstr:\n" << pp(n, m) << " ";
+              tout << m_util.is_datatype(s) << " ";
+              if (m_util.is_datatype(s)) tout << "is-infinite: " << s->is_infinite() << " "; 
+              if (m_util.is_datatype(s)) tout << "attached: " << is_attached_to_var(n) << " ";
+              tout << "\n";);
+
+        if (!is_attached_to_var(n) &&
+            (ctx.has_quantifiers() || 
+             (m_util.is_datatype(s) && m_util.has_nested_arrays()) || 
+             (m_util.is_datatype(s) && !s->is_infinite()))) {
             mk_var(n);
         }
     }
 
     void theory_datatype::new_eq_eh(theory_var v1, theory_var v2) {
+        force_push();
         m_find.merge(v1, v2);
     }
 
@@ -391,7 +411,7 @@ namespace smt {
     }
 
     void theory_datatype::assign_eh(bool_var v, bool is_true) {
-        context & ctx = get_context();
+        force_push();
         enode * n     = ctx.bool_var2enode(v);
         if (!is_recognizer(n))
             return;
@@ -424,8 +444,8 @@ namespace smt {
     }
 
     void theory_datatype::relevant_eh(app * n) {
-        context & ctx = get_context();
-        TRACE("datatype", tout << "relevant_eh: " << mk_pp(n, get_manager()) << "\n";);
+        force_push();
+        TRACE("datatype", tout << "relevant_eh: " << mk_pp(n, m) << "\n";);
         SASSERT(ctx.relevancy());
         if (is_recognizer(n)) {
             SASSERT(ctx.e_internalized(n));
@@ -437,11 +457,15 @@ namespace smt {
     }
 
     void theory_datatype::push_scope_eh() {
+        if (lazy_push())
+            return;
         theory::push_scope_eh();
         m_trail_stack.push_scope();
     }
 
     void theory_datatype::pop_scope_eh(unsigned num_scopes) {
+        if (lazy_pop(num_scopes))
+            return;
         m_trail_stack.pop_scope(num_scopes);
         unsigned num_old_vars = get_old_num_vars(num_scopes);
         std::for_each(m_var_data.begin() + num_old_vars, m_var_data.end(), delete_proc<var_data>());
@@ -452,21 +476,23 @@ namespace smt {
     }
 
     final_check_status theory_datatype::final_check_eh() {
+        force_push();
         int num_vars = get_num_vars();
         final_check_status r = FC_DONE;
-        final_check_st _guard(this); // RAII for managing state
+        final_check_st _guard(this); 
         for (int v = 0; v < num_vars; v++) {
             if (v == static_cast<int>(m_find.find(v))) {
                 enode * node = get_enode(v);
-                if (!oc_cycle_free(node) && occurs_check(node)) {
+                if (m_util.is_recursive(node->get_sort()) && !oc_cycle_free(node) && occurs_check(node)) {
                     // conflict was detected... 
                     // return...
                     return FC_CONTINUE;
                 }
-                if (m_params.m_dt_lazy_splits > 0) {
+                if (params().m_dt_lazy_splits > 0) {
                     // using lazy case splits...
                     var_data * d = m_var_data[v];
                     if (d->m_constructor == nullptr) {
+                        clear_mark();
                         mk_split(v);
                         r = FC_CONTINUE;
                     }
@@ -502,13 +528,24 @@ namespace smt {
                 }
                 found = true;
             }
+            sort * s = arg->get_sort();
+            if (m_autil.is_array(s) && m_util.is_datatype(get_array_range(s))) {
+                for (enode* aarg : get_array_args(arg)) {
+                    if (aarg->get_root() == child->get_root()) {
+                        if (aarg != child) {
+                            m_used_eqs.push_back(enode_pair(aarg, child));
+                        }
+                        found = true;
+                    }
+                }
+            }
         }
         VERIFY(found);
     }
 
     // explain the cycle root -> ... -> app -> root
     void theory_datatype::occurs_check_explain(enode * app, enode * root) {
-        TRACE("datatype", tout << "occurs_check_explain " << mk_bounded_pp(app->get_owner(), get_manager()) << " <-> " << mk_bounded_pp(root->get_owner(), get_manager()) << "\n";);
+        TRACE("datatype", tout << "occurs_check_explain " << mk_bounded_pp(app->get_expr(), m) << " <-> " << mk_bounded_pp(root->get_expr(), m) << "\n";);
 
         // first: explain that root=v, given that app=cstor(...,v,...)
 
@@ -530,7 +567,7 @@ namespace smt {
         TRACE("datatype",
               tout << "occurs_check\n";
               for (enode_pair const& p : m_used_eqs) {
-                  tout << enode_eq_pp(p, get_context());
+                  tout << enode_eq_pp(p, ctx);
               });
     }
 
@@ -557,13 +594,41 @@ namespace smt {
                 occurs_check_explain(parent, arg);
                 return true;
             }
-            // explore `arg` (with paren)
-            if (m_util.is_datatype(get_manager().get_sort(arg->get_owner()))) {
+            // explore `arg` (with parent)
+            expr* earg = arg->get_expr();
+            sort* s = earg->get_sort();
+            if (m_util.is_datatype(s)) {
                 m_parent.insert(arg->get_root(), parent);
                 oc_push_stack(arg);
             }
+            else if (m_autil.is_array(s) && m_util.is_datatype(get_array_range(s))) {
+                for (enode* aarg : get_array_args(arg)) {
+                    if (oc_cycle_free(aarg)) {
+                        continue;
+                    }
+                    if (oc_on_stack(aarg)) {
+                        occurs_check_explain(parent, aarg);
+                        return true;
+                    }
+                    if (m_util.is_datatype(aarg->get_sort())) {
+                        m_parent.insert(aarg->get_root(), parent);
+                        oc_push_stack(aarg);
+                    }
+                }
+            }            
         }
         return false;
+    }
+
+    ptr_vector<enode> const& theory_datatype::get_array_args(enode* n) {
+        m_array_args.reset();
+        theory_array* th = dynamic_cast<theory_array*>(ctx.get_theory(m_autil.get_family_id()));
+        for (enode* p : th->parent_selects(n)) {
+            m_array_args.push_back(p);            
+        }
+        app_ref def(m_autil.mk_default(n->get_expr()), m);
+        m_array_args.push_back(ctx.get_enode(def));
+        return m_array_args;
     }
 
     /**
@@ -574,7 +639,7 @@ namespace smt {
        a3 = cons(v3, a1)
     */
     bool theory_datatype::occurs_check(enode * n) {
-        TRACE("datatype", tout << "occurs check: " << enode_pp(n, get_context()) << "\n";);
+        TRACE("datatype", tout << "occurs check: " << enode_pp(n, ctx) << "\n";);
         m_stats.m_occurs_check++;
 
         bool res = false;
@@ -588,7 +653,7 @@ namespace smt {
 
             if (oc_cycle_free(app)) continue;
 
-            TRACE("datatype", tout << "occurs check loop: " << enode_pp(app, get_context()) << (op==ENTER?" enter":" exit")<< "\n";);
+            TRACE("datatype", tout << "occurs check loop: " << enode_pp(app, ctx) << (op==ENTER?" enter":" exit")<< "\n";);
 
             switch (op) {
             case ENTER:
@@ -603,9 +668,9 @@ namespace smt {
 
         if (res) {
             // m_used_eqs should contain conflict
-            context & ctx = get_context();
             region & r    = ctx.get_region();
-            ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), r, 0, nullptr, m_used_eqs.size(), m_used_eqs.c_ptr())));
+            clear_mark();
+            ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), r, 0, nullptr, m_used_eqs.size(), m_used_eqs.data())));
         }
         return res;
     }
@@ -627,12 +692,16 @@ namespace smt {
         return false;
     }
 
-    theory_datatype::theory_datatype(ast_manager & m, theory_datatype_params & p):
-        theory(m.mk_family_id("datatype")),
-        m_params(p),
+    theory_datatype_params const& theory_datatype::params() const { 
+        return ctx.get_fparams(); 
+    }
+
+    theory_datatype::theory_datatype(context& ctx):
+        theory(ctx, ctx.get_manager().mk_family_id("datatype")),
         m_util(m),
+        m_autil(m),
         m_find(*this),
-        m_trail_stack(*this) {
+        m_trail_stack() {
     }
 
     theory_datatype::~theory_datatype() {
@@ -660,19 +729,27 @@ namespace smt {
         var_data * d = m_var_data[v];
         out << "v" << v << " #" << get_enode(v)->get_owner_id() << " -> v" << m_find.find(v) << " ";
         if (d->m_constructor)
-            out << enode_pp(d->m_constructor, get_context());
+            out << enode_pp(d->m_constructor, ctx);
         else
             out << "(null)";
         out << "\n";
     }
 
     bool theory_datatype::include_func_interp(func_decl* f) {
-        return false; // return m_util.is_accessor(f);
+        if (!m_util.is_accessor(f))
+            return false;
+        func_decl* con = m_util.get_accessor_constructor(f);
+        for (enode* app : ctx.enodes_of(f)) {
+            enode* arg = app->get_arg(0)->get_root();
+            if (is_constructor(arg) && arg->get_decl() != con) 
+                return true;
+        }
+        return false; 
     }
 
-    void theory_datatype::init_model(model_generator & m) {
-        m_factory = alloc(datatype_factory, get_manager(), m.get_model());
-        m.register_factory(m_factory);
+    void theory_datatype::init_model(model_generator & mg) {
+        m_factory = alloc(datatype_factory, m, mg.get_model());
+        mg.register_factory(m_factory);
     }
 
     class datatype_value_proc : public model_value_proc {
@@ -683,11 +760,11 @@ namespace smt {
         void add_dependency(enode * n) { m_dependencies.push_back(model_value_dependency(n)); }
         ~datatype_value_proc() override {}
         void get_dependencies(buffer<model_value_dependency> & result) override {
-            result.append(m_dependencies.size(), m_dependencies.c_ptr());
+            result.append(m_dependencies.size(), m_dependencies.data());
         }
-        app * mk_value(model_generator & mg, ptr_vector<expr> & values) override {
+        app * mk_value(model_generator & mg, expr_ref_vector const & values) override {
             SASSERT(values.size() == m_dependencies.size());
-            return mg.get_manager().mk_app(m_constructor, values.size(), values.c_ptr());
+            return mg.get_manager().mk_app(m_constructor, values.size(), values.data());
         }
     };
 
@@ -699,9 +776,15 @@ namespace smt {
         SASSERT(d->m_constructor);
         func_decl * c_decl = d->m_constructor->get_decl();
         datatype_value_proc * result = alloc(datatype_value_proc, c_decl);
-        unsigned num = d->m_constructor->get_num_args();
-        for (unsigned i = 0; i < num; i++) 
-            result->add_dependency(d->m_constructor->get_arg(i));
+        for (enode* arg : enode::args(d->m_constructor)) {
+            result->add_dependency(arg);
+        }
+        TRACE("datatype", 
+              tout << pp(n, m) << "\n";
+              tout << "depends on\n";
+              for (enode* arg : enode::args(d->m_constructor)) {
+                  tout << " " << pp(arg, m) << "\n";
+              });
         return result;
     }
 
@@ -712,7 +795,6 @@ namespace smt {
         var_data * d1 = m_var_data[v1];
         var_data * d2 = m_var_data[v2];
         if (d2->m_constructor != nullptr) {
-            context & ctx = get_context();
             if (d1->m_constructor != nullptr && d1->m_constructor->get_decl() != d2->m_constructor->get_decl()) {
                 region & r    = ctx.get_region();
                 enode_pair p(d1->m_constructor, d2->m_constructor);
@@ -720,7 +802,7 @@ namespace smt {
                 ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), r, 0, nullptr, 1, &p)));
             }
             if (d1->m_constructor == nullptr) {
-                m_trail_stack.push(set_ptr_trail<theory_datatype, enode>(d1->m_constructor)); 
+                m_trail_stack.push(set_ptr_trail<enode>(d1->m_constructor)); 
                 // check whether there is a recognizer in d1 that conflicts with d2->m_constructor;
                 if (!d1->m_recognizers.empty()) {
                     unsigned c_idx = m_util.get_constructor_idx(d2->m_constructor->get_decl());
@@ -744,7 +826,6 @@ namespace smt {
 
     void theory_datatype::add_recognizer(theory_var v, enode * recognizer) {
         SASSERT(is_recognizer(recognizer));
-        context & ctx = get_context();
         v = m_find.find(v);
         var_data * d = m_var_data[v];
         sort * s     = recognizer->get_decl()->get_domain(0);
@@ -772,9 +853,9 @@ namespace smt {
                 }
                 return;
             }
-            SASSERT(val == l_undef || (val == l_false && d->m_constructor == 0));
+            SASSERT(val == l_undef || (val == l_false && d->m_constructor == nullptr));
             d->m_recognizers[c_idx] = recognizer;
-            m_trail_stack.push(set_vector_idx_trail<theory_datatype, enode>(d->m_recognizers, c_idx));
+            m_trail_stack.push(set_vector_idx_trail<enode>(d->m_recognizers, c_idx));
             if (val == l_false) {
                 propagate_recognizer(v, recognizer);
             }
@@ -787,13 +868,17 @@ namespace smt {
     void theory_datatype::propagate_recognizer(theory_var v, enode * recognizer) {
         SASSERT(is_recognizer(recognizer));
         SASSERT(static_cast<int>(m_find.find(v)) == v);
-        context & ctx = get_context();
         SASSERT(ctx.get_assignment(recognizer) == l_false);
         unsigned num_unassigned  = 0;
         unsigned unassigned_idx  = UINT_MAX;
         enode * n       = get_enode(v);
-        sort * dt       = get_manager().get_sort(n->get_owner());
+        sort * dt       = n->get_sort();
         var_data * d    = m_var_data[v];
+        if (d->m_recognizers.empty()) {
+            theory_var w = recognizer->get_arg(0)->get_th_var(get_id());
+            SASSERT(w != null_theory_var);
+            add_recognizer(w, recognizer);
+        }
         CTRACE("datatype", d->m_recognizers.empty(), ctx.display(tout););
         SASSERT(!d->m_recognizers.empty());
         literal_vector lits;
@@ -820,18 +905,19 @@ namespace smt {
                 unassigned_idx = idx;
             num_unassigned++;
         }
+        TRACE("datatype", tout << "propagate " << num_unassigned << " eqs: " << eqs.size() << "\n";);
         if (num_unassigned == 0) {
             // conflict
             SASSERT(!lits.empty());
             region & reg = ctx.get_region();
-            TRACE("datatype_conflict", tout << mk_ismt2_pp(recognizer->get_owner(), get_manager()) << "\n";
+            TRACE("datatype_conflict", tout << mk_ismt2_pp(recognizer->get_expr(), m) << "\n";
                   for (literal l : lits) {
                       ctx.display_detailed_literal(tout, l) << "\n";
                   }
                   for (auto const& p : eqs) {
                       tout << enode_eq_pp(p, ctx);
                   });
-            ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), reg, lits.size(), lits.c_ptr(), eqs.size(), eqs.c_ptr())));
+            ctx.set_conflict(ctx.mk_justification(ext_theory_conflict_justification(get_id(), reg, lits.size(), lits.data(), eqs.size(), eqs.data())));
         }
         else if (num_unassigned == 1) {
             // propagate remaining recognizer
@@ -841,7 +927,7 @@ namespace smt {
             if (!r) {
                 ptr_vector<func_decl> const & constructors = *m_util.get_datatype_constructors(dt);
                 func_decl * rec = m_util.get_constructor_is(constructors[unassigned_idx]);
-                app * rec_app   = get_manager().mk_app(rec, n->get_owner());
+                app_ref rec_app(m.mk_app(rec, n->get_expr()), m);
                 ctx.internalize(rec_app, false);
                 consequent = literal(ctx.get_bool_var(rec_app));
             }
@@ -851,13 +937,13 @@ namespace smt {
             ctx.mark_as_relevant(consequent);
             region & reg = ctx.get_region();
             ctx.assign(consequent, 
-                       ctx.mk_justification(ext_theory_propagation_justification(get_id(), reg, lits.size(), lits.c_ptr(), 
-                                                                                 eqs.size(), eqs.c_ptr(), consequent)));
+                       ctx.mk_justification(ext_theory_propagation_justification(get_id(), reg, lits.size(), lits.data(), 
+                                                                                 eqs.size(), eqs.data(), consequent)));
         }
         else {
             // there are more than 2 unassigned recognizers...
             // if eager splits are enabled... create new case split
-            if (m_params.m_dt_lazy_splits == 0 || (!dt->is_infinite() && m_params.m_dt_lazy_splits == 1))
+            if (params().m_dt_lazy_splits == 0 || (!dt->is_infinite() && params().m_dt_lazy_splits == 1))
                 mk_split(v);
         }
     }
@@ -867,18 +953,17 @@ namespace smt {
        If first is true, it means that v does not have recognizer yet.
     */
     void theory_datatype::mk_split(theory_var v) {
-        context & ctx         = get_context();
-        ast_manager & m       = get_manager();
         v                     = m_find.find(v);
         enode * n             = get_enode(v);
-        sort * s              = m.get_sort(n->get_owner());
+        sort * s              = n->get_sort();
         func_decl * non_rec_c = m_util.get_non_rec_constructor(s); 
-        TRACE("datatype_bug", tout << "non_rec_c: " << non_rec_c->get_name() << "\n";);
         unsigned non_rec_idx  = m_util.get_constructor_idx(non_rec_c);
         var_data * d          = m_var_data[v];
-        SASSERT(d->m_constructor == 0);
+        SASSERT(d->m_constructor == nullptr);
         func_decl * r         = nullptr;
         m_stats.m_splits++;
+
+        TRACE("datatype_bug", tout << "non_rec_c: " << non_rec_c->get_name() << " #rec: " << d->m_recognizers.size() << "\n";);
 
         if (d->m_recognizers.empty()) {
             r = m_util.get_constructor_is(non_rec_c);
@@ -921,13 +1006,14 @@ namespace smt {
                     return; // all recognizers are asserted to false... conflict will be detected...
             }
         }
-        SASSERT(r != 0);
-        app * r_app     = m.mk_app(r, n->get_owner());
+        SASSERT(r != nullptr);
+        app_ref r_app(m.mk_app(r, n->get_expr()), m);
         TRACE("datatype", tout << "creating split: " << mk_pp(r_app, m) << "\n";);
         ctx.internalize(r_app, false);
         bool_var bv     = ctx.get_bool_var(r_app);
         ctx.set_true_first_flag(bv);
         ctx.mark_as_relevant(bv);
     }
+
 
 };

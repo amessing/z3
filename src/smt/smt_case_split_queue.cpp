@@ -25,7 +25,9 @@ Revision History:
 #include "util/map.h"
 #include "util/hashtable.h"
 
-namespace smt {
+using namespace smt;
+
+namespace {
 
     typedef map<bool_var, double, int_hash, default_eq<bool_var> > theory_var_priority_map;
 
@@ -245,7 +247,7 @@ namespace smt {
         void mk_var_eh(bool_var v) override {
             expr * n = m_context.bool_var2expr(v);
             double act;
-            if (m_cache.find(n, act))
+            if (n && m_cache.find(n, act))
                 m_context.set_activity(v, act);
             act_case_split_queue::mk_var_eh(v);
         }
@@ -255,8 +257,10 @@ namespace smt {
                 double act = m_context.get_activity(v);
                 if (act > 0.0) {
                     expr * n = m_context.bool_var2expr(v);
-                    m_cache.insert(n, act);
-                    m_cache_domain.push_back(n);
+                    if (n) {
+                        m_cache.insert(n, act);
+                        m_cache_domain.push_back(n);
+                    }
                 }
             }
             act_case_split_queue::del_var_eh(v);
@@ -321,7 +325,7 @@ namespace smt {
         ast_manager &     m_manager;
         ptr_vector<expr>  m_queue;
         unsigned          m_head;
-        int               m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
+        bool_var          m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
         ptr_vector<expr>  m_queue2;
         unsigned          m_head2;
         svector<scope>    m_scopes;
@@ -509,7 +513,7 @@ namespace smt {
         smt_params &m_params;  
         ptr_vector<expr>  m_queue;
         unsigned          m_head;
-        int               m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
+        bool_var          m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
         bool_var_act_queue m_delayed_queue;
         svector<scope>    m_scopes;
     public:
@@ -741,7 +745,7 @@ namespace smt {
         ast_manager &        m_manager;
         ptr_vector<expr>     m_queue;
         unsigned             m_head;
-        int                  m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
+        bool_var             m_bs_num_bool_vars; //!< Number of boolean variable before starting to search.
         svector<queue_entry> m_queue2;
         svector<scope>       m_scopes;
         unsigned             m_current_generation;
@@ -753,7 +757,6 @@ namespace smt {
 
         static const unsigned start_gen = 0;
         static const unsigned goal_gen_decrement = 100;
-        static const unsigned stop_gen = goal_gen_decrement + 1;
 
 
     public:
@@ -971,9 +974,6 @@ namespace smt {
         }
 
         void assign_lit_eh(literal l) override {
-            // if (m_current_generation > stop_gen)
-            //    m_current_generation--;
-
             expr * e = m_context.bool_var2expr(l.var());
             if (e == m_current_goal)
                 return;
@@ -1093,7 +1093,6 @@ namespace smt {
 
         void set_goal(expr * e)
         {
-
             if (e == m_current_goal) return;
 
             GOAL_START();
@@ -1248,16 +1247,17 @@ namespace smt {
 
         ~theory_aware_branching_queue() override {};
     };
+}
 
-
+namespace smt {
     case_split_queue * mk_case_split_queue(context & ctx, smt_params & p) {
-        if (p.m_relevancy_lvl < 2 && (p.m_case_split_strategy == CS_RELEVANCY || p.m_case_split_strategy == CS_RELEVANCY_ACTIVITY || 
-                p.m_case_split_strategy == CS_RELEVANCY_GOAL)) {
+        if (ctx.relevancy_lvl() < 2 && (p.m_case_split_strategy == CS_RELEVANCY || p.m_case_split_strategy == CS_RELEVANCY_ACTIVITY || 
+                                        p.m_case_split_strategy == CS_RELEVANCY_GOAL)) {
             warning_msg("relevancy must be enabled to use option CASE_SPLIT=3, 4 or 5");
             p.m_case_split_strategy = CS_ACTIVITY;
         }
         if (p.m_auto_config && (p.m_case_split_strategy == CS_RELEVANCY || p.m_case_split_strategy == CS_RELEVANCY_ACTIVITY || 
-                p.m_case_split_strategy == CS_RELEVANCY_GOAL)) {
+                                p.m_case_split_strategy == CS_RELEVANCY_GOAL)) {
             warning_msg("auto configuration (option AUTO_CONFIG) must be disabled to use option CASE_SPLIT=3, 4 or 5");
             p.m_case_split_strategy = CS_ACTIVITY;
         }
@@ -1279,5 +1279,4 @@ namespace smt {
         }
     }
 
-};
-
+}

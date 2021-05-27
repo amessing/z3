@@ -17,20 +17,23 @@ Revision History:
 
 --*/
 
+#include "ast/ast_pp.h"
 #include "smt/smt_arith_value.h"
 
 namespace smt {
 
     arith_value::arith_value(ast_manager& m): 
-        m_ctx(nullptr), m(m), a(m) {}
+        m_ctx(nullptr), m(m), a(m), b(m) {}
 
     void arith_value::init(context* ctx) {
         m_ctx = ctx;
         family_id afid = a.get_family_id();
+        family_id bfid = b.get_family_id();
         theory* th = m_ctx->get_theory(afid);
         m_tha = dynamic_cast<theory_mi_arith*>(th);
         m_thi = dynamic_cast<theory_i_arith*>(th);
         m_thr = dynamic_cast<theory_lra*>(th);
+        m_thb = dynamic_cast<theory_bv*>(m_ctx->get_theory(bfid));
     }
 
     bool arith_value::get_lo_equiv(expr* e, rational& lo, bool& is_strict) {
@@ -50,6 +53,7 @@ namespace smt {
             next = next->get_next();
         }
         while (n != next);
+        CTRACE("arith_value", !found, tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return found;
     }
 
@@ -69,6 +73,7 @@ namespace smt {
             next = next->get_next();
         }
         while (n != next);
+        CTRACE("arith_value", !found, tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return found;
     }
 
@@ -76,9 +81,11 @@ namespace smt {
         if (!m_ctx->e_internalized(e)) return false;
         is_strict = false;
         enode* n = m_ctx->get_enode(e);
+        if (b.is_bv(e) && m_thb) return m_thb->get_upper(n, up);
         if (m_tha) return m_tha->get_upper(n, up, is_strict);
         if (m_thi) return m_thi->get_upper(n, up, is_strict);
         if (m_thr) return m_thr->get_upper(n, up, is_strict);
+        TRACE("arith_value", tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return false;
     }
 
@@ -86,9 +93,11 @@ namespace smt {
         if (!m_ctx->e_internalized(e)) return false;
         is_strict = false;
         enode* n = m_ctx->get_enode(e);
+        if (b.is_bv(e) && m_thb) return m_thb->get_lower(n, up);
         if (m_tha) return m_tha->get_lower(n, up, is_strict);
         if (m_thi) return m_thi->get_lower(n, up, is_strict);
         if (m_thr) return m_thr->get_lower(n, up, is_strict);
+        TRACE("arith_value", tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return false;
     }
 
@@ -96,9 +105,11 @@ namespace smt {
         if (!m_ctx->e_internalized(e)) return false;
         expr_ref _val(m);
         enode* n = m_ctx->get_enode(e);
+        if (m_thb && b.is_bv(e)) return m_thb->get_value(n, _val);
         if (m_tha && m_tha->get_value(n, _val) && a.is_numeral(_val, val)) return true;
         if (m_thi && m_thi->get_value(n, _val) && a.is_numeral(_val, val)) return true;
         if (m_thr && m_thr->get_value(n, val)) return true;
+        TRACE("arith_value", tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return false;
     }
 
@@ -108,19 +119,48 @@ namespace smt {
         expr_ref _val(m);
         enode* next = m_ctx->get_enode(e), *n = next;
         do { 
-            e = next->get_owner();
+            e = next->get_expr();
             if (m_tha && m_tha->get_value(next, _val) && a.is_numeral(_val, val)) return true;
             if (m_thi && m_thi->get_value(next, _val) && a.is_numeral(_val, val)) return true;
             if (m_thr && m_thr->get_value(next, val)) return true;
             next = next->get_next();
         }
         while (next != n);
+        TRACE("arith_value", tout << "value not found for " << mk_pp(e, m_ctx->get_manager()) << "\n";);
         return false;
     }
+
+    expr_ref arith_value::get_lo(expr* e) const {
+        rational lo;
+        bool s = false;
+        if ((a.is_int_real(e) || b.is_bv(e)) && get_lo(e, lo, s) && !s) {
+            return expr_ref(a.mk_numeral(lo, e->get_sort()), m);
+        }
+        return expr_ref(e, m);
+    }
+
+    expr_ref arith_value::get_up(expr* e) const {
+        rational up;
+        bool s = false;
+        if ((a.is_int_real(e) || b.is_bv(e)) && get_up(e, up, s) && !s) {
+            return expr_ref(a.mk_numeral(up, e->get_sort()), m);
+        }
+        return expr_ref(e, m);
+    }
+
+    expr_ref arith_value::get_fixed(expr* e) const {
+        rational lo, up;
+        bool s = false;
+        if (a.is_int_real(e) && get_lo(e, lo, s) && !s && get_up(e, up, s) && !s && lo == up) {
+            return expr_ref(a.mk_numeral(lo, e->get_sort()), m);
+        }
+        return expr_ref(e, m);
+    }    
 
     final_check_status arith_value::final_check() {
         family_id afid = a.get_family_id();
         theory * th = m_ctx->get_theory(afid);
         return th->final_check_eh();
     }
+
 };

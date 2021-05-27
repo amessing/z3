@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef DIFF_LOGIC_H_
-#define DIFF_LOGIC_H_
+#pragma once
 
 #include "util/vector.h"
 #include "util/heap.h"
@@ -263,14 +262,12 @@ class dl_graph {
 
 public:
     // An assignment is feasible if all edges are feasible.
-    bool is_feasible() const {
-#ifdef Z3DEBUG
+    bool is_feasible_dbg() const {
         for (unsigned i = 0; i < m_edges.size(); ++i) {
             if (!is_feasible(m_edges[i])) {
                 return false;
             }
         }
-#endif
         return true;
     }
 
@@ -315,7 +312,7 @@ private:
         typename assignment_stack::iterator begin = m_assignment_stack.begin();
         while (it != begin) {
             --it;
-            TRACE("diff_logic_bug", tout << "undo assignment: " << it->get_var() << " " << it->get_old_value() << "\n";);
+            TRACE("dl_bug", tout << "undo assignment: " << it->get_var() << " " << it->get_old_value() << "\n";);
             m_assignment[it->get_var()] = it->get_old_value();
         }
         m_assignment_stack.reset();
@@ -371,7 +368,9 @@ private:
         SASSERT(m_gamma[target].is_neg());
         acc_assignment(target, gamma);
 
-        TRACE("arith", tout << id << "\n";);
+        TRACE("arith", display(tout << id << " " << gamma << "\n");
+              display_edge(tout, last_e);
+              );
 
         dl_var source = target;
         while (true) {
@@ -407,10 +406,14 @@ private:
                         if (gamma < m_gamma[target]) {
                             m_gamma[target]  = gamma;
                             m_parent[target] = e_id;
+                            SASSERT(m_heap.contains(target));
                             m_heap.decreased(target);
                         }
                         break;
                     case DL_PROCESSED:
+                        TRACE("arith", display_edge(tout << "processed twice: ", e););
+                        // if two edges with the same source/target occur in the graph.
+                        break;
                     default:
                         UNREACHABLE();
                     }
@@ -418,12 +421,11 @@ private:
             }
 
             if (m_heap.empty()) {
-                SASSERT(is_feasible());
+                SASSERT(is_feasible_dbg());
                 reset_marks();
                 m_assignment_stack.reset();
                 return true;
             }
-
             source = m_heap.erase_min();
             m_mark[source] = DL_PROCESSED;
             acc_assignment(source, m_gamma[source]);
@@ -467,9 +469,10 @@ public:
     // The graph does not have control over the ids assigned by the theory.
     // That is init_var receives the id as an argument.
     void init_var(dl_var v) {
-        TRACE("diff_logic_bug", tout << "init_var " << v << "\n";);
-        SASSERT(static_cast<unsigned>(v) >= m_out_edges.size() ||
-                m_out_edges[v].empty());
+        TRACE("dl_bug", tout << "init_var " << v << "\n";);
+        if (static_cast<unsigned>(v) < m_out_edges.size() && (!m_out_edges[v].empty() || !m_in_edges[v].empty())) {
+            return;
+        }
         SASSERT(check_invariant());
         while (static_cast<unsigned>(v) >= m_out_edges.size()) {
             m_assignment .push_back(numeral());
@@ -484,7 +487,7 @@ public:
         }
         m_assignment[v].reset();
         SASSERT(static_cast<unsigned>(v) < m_heap.get_bounds());
-        TRACE("diff_logic_bug", tout << "init_var " << v << ", m_assignment[v]: " << m_assignment[v] << "\n";);
+        TRACE("dl_bug", tout << "init_var " << v << ", m_assignment[v]: " << m_assignment[v] << "\n";);
         SASSERT(m_assignment[v].is_zero());
         SASSERT(m_out_edges[v].empty());
         SASSERT(m_in_edges[v].empty());
@@ -494,7 +497,7 @@ public:
 
     // Add an new weighted edge "source --weight--> target" with explanation ex.
     edge_id add_edge(dl_var source, dl_var target, const numeral & weight, const explanation & ex) {
-        // SASSERT(is_feasible());
+        // SASSERT(is_feasible_dbg());
         edge_id new_id = m_edges.size();
         m_edges.push_back(edge(source, target, weight, m_timestamp, ex));
         m_activity.push_back(0);
@@ -507,8 +510,10 @@ public:
     // Return false if the resultant graph has a negative cycle. The negative
     // cycle can be extracted using traverse_neg_cycle.
     // The method assumes the graph is feasible before the invocation.
+
     bool enable_edge(edge_id id) {
         edge& e = m_edges[id];
+        SASSERT(is_feasible_dbg());
         bool r = true;
         if (!e.is_enabled()) {
             e.enable(m_timestamp);
@@ -518,7 +523,7 @@ public:
                 r = make_feasible(id);
             }
             SASSERT(check_invariant());
-            SASSERT(!r || is_feasible()); 
+            SASSERT(!r || is_feasible_dbg()); 
             m_enabled_edges.push_back(id);
         }
         return r;
@@ -635,7 +640,7 @@ public:
             }
             );
 
-        if (!check_explanation(edges.size(), edges.c_ptr())) {
+        if (!check_explanation(edges.size(), edges.data())) {
             throw default_exception("edges are not inconsistent");
         }
        
@@ -649,6 +654,10 @@ public:
     }
 
     bool can_reach(dl_var src, dl_var dst) {
+        if (static_cast<unsigned>(src) >= m_out_edges.size() ||
+            static_cast<unsigned>(dst) >= m_out_edges.size()) {
+            return false;
+        }            
         uint_set target, visited;
         target.insert(dst);
         return reachable(src, target, visited, dst);
@@ -658,19 +667,19 @@ public:
         visited.reset();
         svector<dl_var> nodes;
         nodes.push_back(start);
-        for (dl_var n : nodes) {
+        for (unsigned i = 0; i < nodes.size(); ++i) {
+            dl_var n = nodes[i];
             if (visited.contains(n)) continue;
             visited.insert(n);
             edge_id_vector & edges = m_out_edges[n];
             for (edge_id e_id : edges) {
-                edge & e     = m_edges[e_id];
-                if (e.is_enabled()) {
-                    dst = e.get_target();
-                    if (target.contains(dst)) {
-                        return true;
-                    }
-                    nodes.push_back(dst);
+                edge & e = m_edges[e_id];
+                if (!e.is_enabled()) continue;
+                dst = e.get_target();
+                if (target.contains(dst)) {
+                    return true;
                 }
+                nodes.push_back(dst);
             }
         }
         return false;
@@ -853,7 +862,7 @@ public:
     // Create a new scope.
     // That is, save the number of edges in the graph.
     void push() {
-        // SASSERT(is_feasible()); <<< I relaxed this condition
+        // SASSERT(is_feasible_dbg()); <<< I relaxed this condition
         m_trail_stack.push_back(scope(m_edges.size(), m_enabled_edges.size(), m_timestamp));
     }
     
@@ -887,20 +896,20 @@ public:
         }
         m_trail_stack.shrink(new_lvl);
         SASSERT(check_invariant()); 
-        // SASSERT(is_feasible()); <<< I relaxed the condition in push(), so this assertion is not valid anymore.
+        // SASSERT(is_feasible_dbg()); <<< I relaxed the condition in push(), so this assertion is not valid anymore.
     }
 
     // Make m_assignment[v] == zero
     // The whole assignment is adjusted in a way feasibility is preserved.
     // This method should only be invoked if the current assignment if feasible.
     void set_to_zero(dl_var v) {
-        SASSERT(is_feasible());
+        SASSERT(is_feasible_dbg());
         if (!m_assignment[v].is_zero()) {
             numeral k = m_assignment[v];
             for (auto& a : m_assignment) {
                 a -= k;
             }
-            SASSERT(is_feasible());
+            SASSERT(is_feasible_dbg());
         }
     }
 
@@ -910,6 +919,24 @@ public:
     // so the graph is disconnected.
     // assumption: the current assignment is feasible.
     //
+    void set_to_zero(unsigned n, dl_var const* vs) {
+        for (unsigned i = 0; i < n; ++i) {
+            dl_var v = vs[i];
+            if (!m_assignment[v].is_zero()) {
+                set_to_zero(v);
+                for (unsigned j = 0; j < n; ++j) {
+                    dl_var w = vs[j];
+                    if (!m_assignment[w].is_zero()) {
+                        enable_edge(add_edge(v, w, numeral(0), explanation()));
+                        enable_edge(add_edge(w, v, numeral(0), explanation()));
+                        SASSERT(is_feasible_dbg());                        
+                    }
+                }
+                return;
+            }
+        }
+    }
+
     void set_to_zero(dl_var v, dl_var w) {
         if (!m_assignment[v].is_zero()) {
             set_to_zero(v);
@@ -920,7 +947,7 @@ public:
         if (!m_assignment[v].is_zero() || !m_assignment[w].is_zero()) {
             enable_edge(add_edge(v, w, numeral(0), explanation()));
             enable_edge(add_edge(w, v, numeral(0), explanation()));
-            SASSERT(is_feasible());
+            SASSERT(is_feasible_dbg());
         }
     }
 
@@ -929,7 +956,7 @@ private:
     // m_assignment[v] += inc
     // This method also stores the old value of v in the assignment stack.
     void acc_assignment(dl_var v, const numeral & inc) {
-        TRACE("diff_logic_bug", tout << "update v: " << v << " += " << inc << " m_assignment[v] " << m_assignment[v] << "\n";);
+        TRACE("dl_bug", tout << "update v: " << v << " += " << inc << " m_assignment[v] " << m_assignment[v] << "\n";);
         m_assignment_stack.push_back(assignment_trail(v, m_assignment[v]));
         m_assignment[v] += inc;
     }
@@ -1242,7 +1269,8 @@ public:
         m_dfs_time[v] = 0;
         succ.push_back(v);
         numeral gamma;
-        for (dl_var w : succ) {
+        for (unsigned i = 0; i < succ.size(); ++i) { // succ is updated inside of lopp
+            dl_var w = succ[i];
             for (edge_id e_id : m_out_edges[w]) {
                 edge & e = m_edges[e_id];
                 if (e.is_enabled() && set_gamma(e, gamma).is_zero()) {
@@ -1254,7 +1282,6 @@ public:
                     }
                 }
             }
-
         }
     }
 
@@ -1262,12 +1289,12 @@ public:
         return m_assignment[v]; 
     }
 
-    void set_assignment(dl_var v, numeral const & n) {
-        m_assignment[v] = n; 
-    }
-
     unsigned get_timestamp() const {
         return m_timestamp;
+    }
+
+    void set_assignment(dl_var v, numeral const & n) {
+        m_assignment[v] = n; 
     }
 
 private:
@@ -1358,7 +1385,7 @@ public:
     template<typename Functor>
     bool find_shortest_path_aux(dl_var source, dl_var target, unsigned timestamp, Functor & f, bool zero_edge) {
         svector<bfs_elem> bfs_todo;
-        svector<bool>     bfs_mark;
+        bool_vector     bfs_mark;
         bfs_mark.resize(m_assignment.size(), false);
         
         bfs_todo.push_back(bfs_elem(source, -1, null_edge_id));
@@ -1873,5 +1900,4 @@ public:
     }
 };
 
-#endif /* DIFF_LOGIC_H_ */
 

@@ -16,8 +16,12 @@ Author:
 Notes:
 
 --*/
-#ifndef Z3_OPTIMIZATION_H_
-#define Z3_OPTIMIZATION_H_
+#pragma once
+
+/**
+   \brief callback functions for models.
+ */
+typedef void Z3_model_eh(void* ctx);
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,6 +86,7 @@ extern "C" {
        \param id - optional identifier to group soft constraints
 
        \sa Z3_optimize_assert
+       \sa Z3_optimize_assert_and_track
 
        def_API('Z3_optimize_assert_soft', UINT, (_in(CONTEXT), _in(OPTIMIZE), _in(AST), _in(STRING), _in(SYMBOL)))
     */
@@ -351,6 +356,18 @@ extern "C" {
     */
     Z3_ast_vector Z3_API Z3_optimize_get_objectives(Z3_context c, Z3_optimize o);
 
+
+    /**
+       \brief register a model event handler for new models.
+     */
+    void Z3_API Z3_optimize_register_model_eh(
+        Z3_context   c, 
+        Z3_optimize  o,
+        Z3_model     m,
+        void*        ctx,
+        Z3_model_eh  model_eh);
+
+
     /*@}*/
     /*@}*/
 
@@ -358,4 +375,3 @@ extern "C" {
 }
 #endif // __cplusplus
 
-#endif

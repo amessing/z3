@@ -23,18 +23,16 @@ Revision History:
 namespace smt {
 
     bool checker::all_args(app * a, bool is_true) {
-        unsigned num_args = a->get_num_args();
-        for (unsigned i = 0; i < num_args; i++) {
-            if (!check(a->get_arg(i), is_true))
+        for (expr* arg : *a) {
+            if (!check(arg, is_true))
                 return false;
         }
         return true;
     }
 
     bool checker::any_arg(app * a, bool is_true) {
-        unsigned num_args = a->get_num_args();
-        for (unsigned i = 0; i < num_args; i++) {
-            if (check(a->get_arg(i), is_true))
+        for (expr* arg : *a) {
+            if (check(arg, is_true))
                 return true;
         }
         return false;
@@ -104,7 +102,7 @@ namespace smt {
         }
         enode * e = get_enode_eq_to(a);
         if (e && e->is_bool() && m_context.is_relevant(e)) {
-            lbool val = m_context.get_assignment(e->get_owner());
+            lbool val = m_context.get_assignment(e->get_expr());
             return val != l_undef && is_true == (val == l_true);
         }
         return false;
@@ -129,7 +127,7 @@ namespace smt {
                 return nullptr;
             buffer.push_back(arg);
         }
-        enode * e = m_context.get_enode_eq_to(n->get_decl(), num, buffer.c_ptr());
+        enode * e = m_context.get_enode_eq_to(n->get_decl(), num, buffer.data());
         if (e == nullptr)
             return nullptr;
         return m_context.is_relevant(e) ? e : nullptr;

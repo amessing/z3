@@ -19,8 +19,7 @@ Revision History:
 
 --*/
 
-#ifndef EXPR_FUNCTORS_H_
-#define EXPR_FUNCTORS_H_
+#pragma once
 
 #include "ast/ast.h"
 #include "ast/expr_map.h"
@@ -92,7 +91,7 @@ public:
     }
     
     bool operator()(expr_ref_vector const& v) {
-        return (*this)(v.size(), v.c_ptr());
+        return (*this)(v.size(), v.data());
     }
     
     bool operator()(unsigned size, expr* const* es);
@@ -128,4 +127,3 @@ public:
 };
 
 
-#endif

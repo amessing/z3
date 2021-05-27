@@ -21,7 +21,6 @@ Notes:
 #include "tactic/core/propagate_values_tactic.h"
 #include "tactic/core/solve_eqs_tactic.h"
 #include "tactic/core/elim_uncnstr_tactic.h"
-#include "smt/tactic/smt_tactic.h"
 #include "tactic/bv/bit_blaster_tactic.h"
 #include "tactic/bv/bv1_blaster_tactic.h"
 #include "tactic/bv/max_bv_sharing_tactic.h"
@@ -30,6 +29,7 @@ Notes:
 #include "sat/tactic/sat_tactic.h"
 #include "sat/sat_solver/inc_sat_solver.h"
 #include "ackermannization/ackermannize_bv_tactic.h"
+#include "tactic/smtlogics/smt_tactic.h"
 
 #define MEMLIMIT 300
 
@@ -60,6 +60,7 @@ static tactic * mk_qfbv_preamble(ast_manager& m, params_ref const& p) {
             mk_elim_uncnstr_tactic(m),
             if_no_proofs(if_no_unsat_cores(mk_bv_size_reduction_tactic(m))),
             using_params(mk_simplify_tactic(m), simp2_p),
+
             //
             // Z3 can solve a couple of extra benchmarks by using hoist_mul
             // but the timeout in SMT-COMP is too small.
@@ -121,9 +122,8 @@ static tactic * mk_qfbv_tactic(ast_manager& m, params_ref const & p, tactic* sat
 
 tactic * mk_qfbv_tactic(ast_manager & m, params_ref const & p) {
     tactic * new_sat = cond(mk_produce_proofs_probe(),
-                            and_then(mk_simplify_tactic(m), mk_smt_tactic(m)),
+                            and_then(mk_simplify_tactic(m), mk_smt_tactic(m, p)),
                             mk_psat_tactic(m, p));
-
     return mk_qfbv_tactic(m, p, new_sat, mk_smt_tactic(m, p));
 
 }

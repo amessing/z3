@@ -57,7 +57,6 @@ namespace datalog {
         {
             // m_fparams.m_relevancy_lvl = 0;
             m_fparams.m_mbqi = false;
-            m_fparams.m_timeout = 1000;
         }
 
         ~imp() {}        
@@ -121,7 +120,7 @@ namespace datalog {
                     m_ground[i] = m.mk_fresh_const("c", fv[i]);
                 }
             }
-            e = m_var_subst(e, m_ground.size(), m_ground.c_ptr());
+            e = m_var_subst(e, m_ground.size(), m_ground.data());
         }
 
         static bool rule_sort_fn(const rule *r1, const rule *r2) {

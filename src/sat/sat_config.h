@@ -17,8 +17,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef SAT_CONFIG_H_
-#define SAT_CONFIG_H_
+#pragma once
 
 #include "util/params.h"
 
@@ -27,7 +26,9 @@ namespace sat {
     enum phase_selection {
         PS_ALWAYS_TRUE,
         PS_ALWAYS_FALSE,
-        PS_CACHING,
+        PS_BASIC_CACHING,
+        PS_SAT_CACHING,
+        PS_FROZEN,
         PS_RANDOM
     };
 
@@ -48,8 +49,7 @@ namespace sat {
 
     enum branching_heuristic {
         BH_VSIDS,
-        BH_CHB,
-        BH_LRB
+        BH_CHB
     };
 
     enum pb_resolve {
@@ -86,9 +86,13 @@ namespace sat {
     struct config {
         unsigned long long m_max_memory;
         phase_selection    m_phase;
-        unsigned           m_phase_caching_on;
-        unsigned           m_phase_caching_off;
+        unsigned           m_search_sat_conflicts;
+        unsigned           m_search_unsat_conflicts;
         bool               m_phase_sticky;
+        unsigned           m_rephase_base;
+        unsigned           m_reorder_base;
+        double             m_reorder_itau;
+        unsigned           m_reorder_activity_scale;
         bool               m_propagate_prefetch;
         restart_strategy   m_restart;
         bool               m_restart_fast;
@@ -96,20 +100,37 @@ namespace sat {
         double             m_restart_factor; // for geometric case
         double             m_restart_margin; // for ema
         unsigned           m_restart_max;
+        unsigned           m_activity_scale;
         double             m_fast_glue_avg;
         double             m_slow_glue_avg;
         unsigned           m_inprocess_max;
+        symbol             m_inprocess_out;
         double             m_random_freq;
         unsigned           m_random_seed;
         unsigned           m_burst_search;
+        bool               m_enable_pre_simplify;
         unsigned           m_max_conflicts;
         unsigned           m_num_threads;
+        bool               m_ddfw_search;
+        unsigned           m_ddfw_threads;
+        bool               m_prob_search;
         unsigned           m_local_search_threads;
         bool               m_local_search;
         local_search_mode  m_local_search_mode;
         bool               m_local_search_dbg_flips;
-        unsigned           m_unit_walk_threads;
-        bool               m_unit_walk;
+        bool               m_binspr;
+        bool               m_cut_simplify;
+        unsigned           m_cut_delay;
+        bool               m_cut_aig;
+        bool               m_cut_lut;
+        bool               m_cut_xor;
+        bool               m_cut_npn3;
+        bool               m_cut_dont_cares;
+        bool               m_cut_redundancies;
+        bool               m_cut_force;
+        bool               m_anf_simplify;
+        unsigned           m_anf_delay;
+        bool               m_anf_exlin;
         bool               m_lookahead_simplify;
         bool               m_lookahead_simplify_bca;
         cutoff_t           m_lookahead_cube_cutoff;
@@ -143,18 +164,25 @@ namespace sat {
 
         bool               m_force_cleanup;
 
+        // backtracking
+        unsigned           m_backtrack_scopes;
+        unsigned           m_backtrack_init_conflicts;
 
         bool               m_minimize_lemmas;
         bool               m_dyn_sub_res;
         bool               m_core_minimize;
         bool               m_core_minimize_partial;
+
+        // drat proofs
         bool               m_drat;
         bool               m_drat_binary;
         symbol             m_drat_file;
         bool               m_drat_check_unsat;
         bool               m_drat_check_sat;
+        bool               m_drat_activity;
         
         bool               m_card_solver;
+        bool               m_xor_solver;
         pb_resolve         m_pb_resolve;
         pb_lemma_format    m_pb_lemma_format;
         
@@ -177,4 +205,3 @@ namespace sat {
     };
 };
 
-#endif

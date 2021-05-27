@@ -18,8 +18,7 @@ Author:
 Notes:
 
 --*/
-#ifndef CMD_CONTEXT_H_
-#define CMD_CONTEXT_H_
+#pragma once
 
 #include<sstream>
 #include<vector>
@@ -36,19 +35,19 @@ Notes:
 #include "ast/rewriter/seq_rewriter.h"
 #include "tactic/generic_model_converter.h"
 #include "solver/solver.h"
+#include "solver/check_logic.h"
 #include "solver/progress_callback.h"
 #include "cmd_context/pdecl.h"
 #include "cmd_context/tactic_manager.h"
-#include "cmd_context/check_logic.h"
-#include "cmd_context/context_params.h"
+#include "params/context_params.h"
 
 
 class func_decls {
-    func_decl * m_decls;
+    func_decl * m_decls { nullptr };
     bool signatures_collide(func_decl* f, func_decl* g) const;
     bool signatures_collide(unsigned n, sort*const* domain, sort* range, func_decl* g) const;
 public:
-    func_decls():m_decls(nullptr) {}
+    func_decls() {}
     func_decls(ast_manager & m, func_decl * f);
     void finalize(ast_manager & m);
     bool contains(func_decl * f) const;
@@ -59,10 +58,11 @@ public:
     bool clash(func_decl * f) const;
     bool empty() const { return m_decls == nullptr; }
     func_decl * first() const;
-    func_decl * find(unsigned arity, sort * const * domain, sort * range) const;
-    func_decl * find(ast_manager & m, unsigned num_args, expr * const * args, sort * range) const;
+    func_decl * find(ast_manager & m, unsigned arity, sort * const * domain, sort * range) const;
+    func_decl * find(ast_manager & m, unsigned arity, expr * const * args, sort * range) const;
     unsigned get_num_entries() const;
     func_decl * get_entry(unsigned inx);
+    bool check_signature(ast_manager& m, func_decl* f, unsigned arityh, sort * const* domain, sort * range, bool& coerced) const;
 };
 
 struct macro_decl {
@@ -82,8 +82,10 @@ public:
     macro_decls() { m_decls = nullptr; }
     void finalize(ast_manager& m);
     bool insert(ast_manager& m, unsigned arity, sort *const* domain, expr* body);
+    bool empty() const { return !m_decls || m_decls->empty(); }
     expr* find(unsigned arity, sort *const* domain) const;
     void erase_last(ast_manager& m);
+    macro_decl const& last() const { return m_decls->back(); }
     vector<macro_decl>::iterator begin() const { return m_decls->begin(); }
     vector<macro_decl>::iterator end() const { return m_decls->end(); }
 };
@@ -92,9 +94,8 @@ public:
    \brief Generic wrapper.
 */
 class object_ref {
-    unsigned m_ref_count;
+    unsigned m_ref_count = 0;
 public:
-    object_ref():m_ref_count(0) {}
     virtual ~object_ref() {}
     virtual void finalize(cmd_context & ctx) = 0;
     void inc_ref(cmd_context & ctx) {
@@ -159,6 +160,18 @@ public:
     virtual void updt_params(params_ref const& p) = 0;
 };
 
+class ast_context_params : public context_params { 
+    ast_manager* m_manager { nullptr };
+public:
+    /**
+       \brief Create an AST manager using this configuration.
+    */
+    ast_manager * mk_ast_manager();
+
+    void set_foreign_manager(ast_manager* m) { m_manager = m; }
+    bool owns_manager() const { return m_manager != nullptr; }
+};
+
 class cmd_context : public progress_callback, public tactic_manager, public ast_printer_context {
 public:
     enum status {
@@ -178,8 +191,10 @@ public:
         ~scoped_watch() { m_ctx.m_watch.stop(); }
     };
 
+    
+
 protected:
-    context_params               m_params;
+    ast_context_params                  m_params;
     bool                         m_main_ctx;
     symbol                       m_logic;
     bool                         m_interactive_mode;
@@ -192,12 +207,13 @@ protected:
     status                       m_status;
     bool                         m_numeral_as_real;
     bool                         m_ignore_check;      // used by the API to disable check-sat() commands when parsing SMT 2.0 files.
-    bool                         m_processing_pareto; // used when re-entering check-sat for pareto front.
     bool                         m_exit_on_error;
+    bool                         m_allow_duplicate_declarations { false };
 
     static std::ostringstream    g_error_stream;
 
-    generic_model_converter_ref  m_mc0;
+    generic_model_converter* mc0() { return m_mcs.back(); }
+    sref_vector<generic_model_converter> m_mcs;
     ast_manager *                m_manager;
     bool                         m_own_manager;
     bool                         m_manager_initialized;
@@ -273,6 +289,7 @@ protected:
     void init_external_manager();
     void reset_cmds();
     void finalize_cmds();
+    void add_declared_functions(model& mdl);
 
     void restore_func_decls(unsigned old_sz);
     void restore_psort_decls(unsigned old_sz);
@@ -305,7 +322,7 @@ protected:
     bool contains_macro(symbol const& s, unsigned arity, sort *const* domain) const;
     void insert_macro(symbol const& s, unsigned arity, sort*const* domain, expr* t);
     void erase_macro(symbol const& s);
-    bool macros_find(symbol const& s, unsigned n, expr*const* args, expr*& t) const;
+    bool macros_find(symbol const& s, unsigned n, expr*const* args, expr_ref_vector& coerced_args, expr*& t) const;
 
     recfun::decl::plugin& get_recfun_plugin();
 
@@ -313,6 +330,7 @@ public:
     cmd_context(bool main_ctx = true, ast_manager * m = nullptr, symbol const & l = symbol::null);
     ~cmd_context() override;
     void set_cancel(bool f);
+    void register_plist();
     context_params  & params() { return m_params; }
     solver_factory &get_solver_factory() { return *m_solver_factory; }
     opt_wrapper*  get_opt();
@@ -347,6 +365,7 @@ public:
     void set_produce_unsat_cores(bool flag);
     void set_produce_proofs(bool flag);
     void set_produce_unsat_assumptions(bool flag) { m_produce_unsat_assumptions = flag; }
+    void set_allow_duplicate_declarations() { m_allow_duplicate_declarations = true; }
     bool produce_assignments() const { return m_produce_assignments; }
     bool produce_unsat_assumptions() const { return m_produce_unsat_assumptions; }
     void set_produce_assignments(bool flag) { m_produce_assignments = flag; }
@@ -366,6 +385,8 @@ public:
     check_sat_state cs_state() const;
     void complete_model(model_ref& mdl) const;
     void validate_model();
+    void analyze_failure(expr_mark& seen, model_evaluator& ev, expr* e, bool expected_value);
+    void display_detailed_analysis(std::ostream& out, model_evaluator& ev, expr* e);
     void display_model(model_ref& mdl);
 
     void register_plugin(symbol const & name, decl_plugin * p, bool install_names);
@@ -385,7 +406,6 @@ public:
     void model_add(symbol const & s, unsigned arity, sort *const* domain, expr * t);
     void model_del(func_decl* f);
     void insert_rec_fun(func_decl* f, expr_ref_vector const& binding, svector<symbol> const& ids, expr* e);
-    void insert_rec_fun_as_axiom(func_decl* f, expr_ref_vector const& binding, svector<symbol> const& ids, expr* e);
     func_decl * find_func_decl(symbol const & s) const;
     func_decl * find_func_decl(symbol const & s, unsigned num_indices, unsigned const * indices,
                                unsigned arity, sort * const * domain, sort * range) const;
@@ -397,6 +417,13 @@ public:
     void mk_const(symbol const & s, expr_ref & result) const;
     void mk_app(symbol const & s, unsigned num_args, expr * const * args, unsigned num_indices, parameter const * indices, sort * range,
                 expr_ref & r) const;
+    bool try_mk_macro_app(symbol const & s, unsigned num_args, expr * const * args, unsigned num_indices, parameter const * indices, sort * range,
+                expr_ref & r) const;
+    bool try_mk_builtin_app(symbol const & s, unsigned num_args, expr * const * args, unsigned num_indices, parameter const * indices, sort * range,
+                expr_ref & r) const;
+    bool try_mk_declared_app(symbol const & s, unsigned num_args, expr * const * args, 
+                             unsigned num_indices, parameter const * indices, sort * range,
+                             func_decls& fs, expr_ref & result) const;
     void erase_cmd(symbol const & s);
     void erase_func_decl(symbol const & s);
     void erase_func_decl(symbol const & s, func_decl * f);
@@ -446,7 +473,7 @@ public:
 
     dictionary<macro_decls> const & get_macros() const { return m_macros; }
 
-    model_converter* get_model_converter() { return m_mc0.get(); }
+    model_converter* get_model_converter() { return mc0(); }
 
     bool is_model_available(model_ref& md) const;
 
@@ -454,6 +481,7 @@ public:
 
     ptr_vector<expr> const& assertions() const { return m_assertions; }
     ptr_vector<expr> const& assertion_names() const { return m_assertion_names; }
+    expr_ref_vector tracked_assertions();
 
     /**
        \brief Hack: consume assertions if there are no scopes.
@@ -509,4 +537,3 @@ public:
     }
 };
 
-#endif

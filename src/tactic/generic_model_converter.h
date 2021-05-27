@@ -17,8 +17,7 @@ Author:
 Notes:
 
 --*/
-#ifndef GENERIC_MODEL_CONVERTER_H_
-#define GENERIC_MODEL_CONVERTER_H_
+#pragma once
 
 #include "tactic/model_converter.h"
 
@@ -59,7 +58,9 @@ public:
 
     void display(std::ostream & out) override;
 
-    model_converter * translate(ast_translation & translator) override;
+    model_converter * translate(ast_translation & translator) override { return copy(translator); }
+
+    generic_model_converter* copy(ast_translation & translator);
 
     void set_env(ast_pp_util* visitor) override;
 
@@ -70,4 +71,3 @@ public:
 
 typedef ref<generic_model_converter> generic_model_converter_ref;
 
-#endif

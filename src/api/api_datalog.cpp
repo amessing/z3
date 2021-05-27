@@ -243,7 +243,8 @@ extern "C" {
         Z3_TRY;
         LOG_Z3_fixedpoint_dec_ref(c, s);
         RESET_ERROR_CODE();
-        to_fixedpoint(s)->dec_ref();
+        if (s)
+            to_fixedpoint(s)->dec_ref();
         Z3_CATCH;
     }
 
@@ -280,7 +281,7 @@ extern "C" {
         RESET_ERROR_CODE();
         lbool r = l_undef;
         unsigned timeout = to_fixedpoint(d)->m_params.get_uint("timeout", mk_c(c)->get_timeout());
-        unsigned rlimit  = to_fixedpoint(d)->m_params.get_uint("rlimit", mk_c(c)->get_rlimit());
+        unsigned rlimit  = to_fixedpoint(d)->m_params.get_uint("rlimit",  mk_c(c)->get_rlimit());
         bool     use_ctrl_c  = to_fixedpoint(d)->m_params.get_bool("ctrl_c", true);
         {
             scoped_rlimit _rlimit(mk_c(c)->m().limit(), rlimit);
@@ -350,7 +351,7 @@ extern "C" {
         unsigned num_queries,
         Z3_ast _queries[]) {
         Z3_TRY;
-        expr*const* queries = to_exprs(_queries);        
+        expr*const* queries = to_exprs(num_queries, _queries);        
         LOG_Z3_fixedpoint_to_string(c, d, num_queries, _queries);
         RESET_ERROR_CODE();
         return mk_c(c)->mk_external_string(to_fixedpoint_ref(d)->to_string(num_queries, queries));
@@ -373,11 +374,11 @@ extern "C" {
 
         Z3_ast_vector_ref* v = alloc(Z3_ast_vector_ref, *mk_c(c), m);
         mk_c(c)->save_object(v);
-        for (unsigned i = 0; i < coll.m_queries.size(); ++i) {
-            v->m_ast_vector.push_back(coll.m_queries[i].get());
+        for (expr * q : coll.m_queries) {
+            v->m_ast_vector.push_back(q);
         }
-        for (unsigned i = 0; i < coll.m_rels.size(); ++i) {
-            to_fixedpoint_ref(d)->ctx().register_predicate(coll.m_rels[i].get(), true);
+        for (func_decl * f : coll.m_rels) {
+            to_fixedpoint_ref(d)->ctx().register_predicate(f, true);
         }
         for (unsigned i = 0; i < coll.m_rules.size(); ++i) {
             to_fixedpoint_ref(d)->add_rule(coll.m_rules[i].get(), coll.m_names[i]);
@@ -448,7 +449,7 @@ extern "C" {
         for (unsigned i = 0; i < num_relations; ++i) {
             kinds.push_back(to_symbol(relation_kinds[i]));
         }
-        to_fixedpoint_ref(d)->ctx().set_predicate_representation(to_func_decl(f), num_relations, kinds.c_ptr());
+        to_fixedpoint_ref(d)->ctx().set_predicate_representation(to_func_decl(f), num_relations, kinds.data());
         Z3_CATCH;
     }
 
@@ -466,11 +467,11 @@ extern "C" {
         svector<symbol> names;
         
         to_fixedpoint_ref(d)->ctx().get_rules_as_formulas(rules, queries, names);
-        for (unsigned i = 0; i < rules.size(); ++i) {
-            v->m_ast_vector.push_back(rules[i].get());
+        for (expr* r : rules) {
+            v->m_ast_vector.push_back(r);
         }
-        for (unsigned i = 0; i < queries.size(); ++i) {
-            v->m_ast_vector.push_back(m.mk_not(queries[i].get()));
+        for (expr* q : queries) {
+            v->m_ast_vector.push_back(m.mk_not(q));
         }
         RETURN_Z3(of_ast_vector(v));
         Z3_CATCH_RETURN(nullptr);
@@ -588,23 +589,6 @@ extern "C" {
         Z3_CATCH;
     }
 
-    void Z3_API Z3_fixedpoint_push(Z3_context c,Z3_fixedpoint d) {
-        Z3_TRY;
-        LOG_Z3_fixedpoint_push(c, d);
-        RESET_ERROR_CODE();
-        to_fixedpoint_ref(d)->ctx().push();
-        Z3_CATCH;
-    }
-
-    void Z3_API Z3_fixedpoint_pop(Z3_context c,Z3_fixedpoint d) {
-        Z3_TRY;
-        LOG_Z3_fixedpoint_pop(c, d);
-        RESET_ERROR_CODE();
-        to_fixedpoint_ref(d)->ctx().pop();
-        Z3_CATCH;
-
-    }
-
     void Z3_API Z3_fixedpoint_add_callback(Z3_context c, Z3_fixedpoint d,
                                             void *state,
                                             Z3_fixedpoint_new_lemma_eh new_lemma_eh,
@@ -694,10 +678,12 @@ extern "C" {
         
         to_fixedpoint_ref(d)->ctx().get_rules_along_trace_as_formulas(rules, names);
         for (unsigned i = 0; i < names.size(); ++i) {
-            ss << ";" << names[i].str();
+            if (i != 0)
+                ss << ';';
+            ss << names[i].str();
         }
-        RETURN_Z3(of_symbol(symbol(ss.str().substr(1).c_str())));
-        Z3_CATCH_RETURN(nullptr);
+        return of_symbol(symbol(ss.str()));
+        Z3_CATCH_RETURN(of_symbol(symbol::null));
     }
 
     void Z3_API Z3_fixedpoint_add_invariant(Z3_context c, Z3_fixedpoint d, Z3_func_decl pred, Z3_ast property) {

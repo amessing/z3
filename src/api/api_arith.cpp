@@ -71,7 +71,7 @@ extern "C" {
         LOG_Z3_mk_div(c, n1, n2);
         RESET_ERROR_CODE();
         decl_kind k = OP_IDIV;
-        sort* ty = mk_c(c)->m().get_sort(to_expr(n1));
+        sort* ty = to_expr(n1)->get_sort();
         sort* real_ty = mk_c(c)->m().mk_sort(mk_c(c)->get_arith_fid(), REAL_SORT);
         if (ty == real_ty) {
             k = OP_DIV;
@@ -88,6 +88,7 @@ extern "C" {
     MK_ARITH_PRED(Z3_mk_gt,  OP_GT);
     MK_ARITH_PRED(Z3_mk_le,  OP_LE);
     MK_ARITH_PRED(Z3_mk_ge,  OP_GE);
+    MK_ARITH_PRED(Z3_mk_divides, OP_IDIVIDES);
     MK_UNARY(Z3_mk_int2real, mk_c(c)->get_arith_fid(), OP_TO_REAL, SKIP);
     MK_UNARY(Z3_mk_real2int, mk_c(c)->get_arith_fid(), OP_TO_INT, SKIP);
     MK_UNARY(Z3_mk_is_int,   mk_c(c)->get_arith_fid(), OP_IS_INT, SKIP);

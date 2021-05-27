@@ -16,9 +16,9 @@ Author:
 Revision History:
 
 --*/
-#ifndef SMT_THEORY_H_
-#define SMT_THEORY_H_
+#pragma once
 
+#include "ast/ast_pp.h"
 #include "smt/smt_enode.h"
 #include "smt/smt_quantifier.h"
 #include "util/obj_hashtable.h"
@@ -30,16 +30,18 @@ namespace smt {
     class model_value_proc;
 
     class theory {
+    protected:
         theory_id       m_id;
-        context *       m_context;
-        ast_manager *   m_manager;
+        context &       ctx;
+        ast_manager &   m;
         enode_vector    m_var2enode;
         unsigned_vector m_var2enode_lim;
+        unsigned        m_lazy_scopes;
+        bool            m_lazy;
 
         friend class context;
         friend class arith_value;
     protected:
-        virtual void init(context * ctx);
 
         /* ---------------------------------------------------
         
@@ -66,6 +68,16 @@ namespace smt {
             m_var2enode.push_back(n);
             return v;
         }
+
+        theory_var get_th_var(expr* e) const;
+
+        theory_var get_th_var(enode* n) const {
+            return n->get_th_var(get_id());
+        }
+
+        bool lazy_push();
+        bool lazy_pop(unsigned& num_scopes);
+        void force_push();
         
     public:
         /**
@@ -83,6 +95,76 @@ namespace smt {
             theory_var v = n->get_th_var(get_id());
             return v != null_theory_var && get_enode(v) == n;
         }
+
+        struct scoped_trace_stream {
+            ast_manager& m;
+            
+            scoped_trace_stream(ast_manager& m, std::function<void (void)>& fn): m(m) {
+                if (m.has_trace_stream()) {
+                    fn();
+                }
+            }
+
+            scoped_trace_stream(theory& th, std::function<expr* (void)>& fn): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    expr_ref body(fn(), m);
+                    th.log_axiom_instantiation(body);
+                }
+            }
+
+            scoped_trace_stream(theory& th, std::function<literal_vector(void)>& fn): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    th.log_axiom_instantiation(fn());
+                }
+            }
+
+            scoped_trace_stream(theory& th, literal_vector const& lits): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    th.log_axiom_instantiation(lits);
+                }
+            }
+
+            scoped_trace_stream(theory& th, literal lit): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    literal_vector lits;
+                    lits.push_back(lit);
+                    th.log_axiom_instantiation(lits);
+                }
+            }
+
+            scoped_trace_stream(theory& th, literal lit1, literal lit2): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    literal_vector lits;
+                    lits.push_back(lit1);
+                    lits.push_back(lit2);
+                    th.log_axiom_instantiation(lits);
+                }
+            }
+
+            scoped_trace_stream(theory& th, std::function<literal(void)>& fn): m(th.get_manager()) {
+                if (m.has_trace_stream()) {
+                    literal_vector ls;
+                    ls.push_back(fn());
+                    th.log_axiom_instantiation(ls);
+                }
+            }
+            
+            ~scoped_trace_stream() {
+                if (m.has_trace_stream()) {
+                    m.trace_stream() << "[end-of-instance]\n";
+                }
+            }
+        };
+
+        struct if_trace_stream {
+            ast_manager& m;
+            
+            if_trace_stream(ast_manager& m, std::function<void (void)>& fn): m(m) {
+                if (m.has_trace_stream()) {
+                    fn();
+                }
+            }
+        };        
 
     protected:
         /**
@@ -134,6 +216,13 @@ namespace smt {
            assigned to the given boolean variable.
         */
         virtual void assign_eh(bool_var v, bool is_true) {
+        }
+
+        /**
+           \brief use the theory to determine phase of the variable.
+         */
+        virtual lbool get_phase(bool_var v) {
+            return l_undef;
         }
 
         /**
@@ -262,13 +351,11 @@ namespace smt {
 
         // ----------------------------------------------------
         //
-        // Model validation (-vldt flag)
+        // Model validation 
         //
         // ----------------------------------------------------
 
-        virtual bool validate_eq_in_model(theory_var v1, theory_var v2, bool is_true) const {
-            return true;
-        }
+        virtual void validate_model(model& mdl) {}
 
         // ----------------------------------------------------
         //
@@ -286,11 +373,12 @@ namespace smt {
 
 
     public:
-        theory(family_id fid);
+        theory(context& ctx, family_id fid);
         virtual ~theory();
         
-        virtual void setup() {
-        }
+        virtual void setup() {}
+
+        virtual void init() {}
 
         theory_id get_id() const {
             return m_id;
@@ -301,20 +389,22 @@ namespace smt {
         }
 
         context & get_context() const {
-            SASSERT(m_context);
-            return *m_context;
+            return ctx;
         }
-
-        context & ctx() const { return get_context(); }
         
         ast_manager & get_manager() const {
-            SASSERT(m_manager);
-            return *m_manager;
+            return m;
         }
+
+        smt_params const& get_fparams() const;
 
         enode * get_enode(theory_var v) const {
             SASSERT(v < static_cast<int>(m_var2enode.size()));
             return m_var2enode[v];
+        }
+
+        app * get_expr(theory_var v) const {
+            return get_enode(v)->get_expr();
         }
 
         /**
@@ -335,6 +425,8 @@ namespace smt {
         bool is_representative(theory_var v) const {
             return get_representative(v) == v;
         }
+
+        virtual bool is_safe_to_copy(bool_var v) const { return true; }
         
         unsigned get_num_vars() const {
             return m_var2enode.size();
@@ -355,9 +447,9 @@ namespace smt {
         
         std::ostream& display_flat_app(std::ostream & out, app * n) const;
         
-        std::ostream& display_var_def(std::ostream & out, theory_var v) const { return display_app(out, get_enode(v)->get_owner()); }
+        std::ostream& display_var_def(std::ostream & out, theory_var v) const { return display_app(out, get_enode(v)->get_expr()); }
         
-        std::ostream& display_var_flat_def(std::ostream & out, theory_var v) const { return display_flat_app(out, get_enode(v)->get_owner());  }
+        std::ostream& display_var_flat_def(std::ostream & out, theory_var v) const { return display_flat_app(out, get_enode(v)->get_expr());  }
 
     protected:
         void log_axiom_instantiation(app * r, unsigned axiom_id = UINT_MAX, unsigned num_bindings = 0, 
@@ -370,12 +462,19 @@ namespace smt {
             log_axiom_instantiation(to_app(r), axiom_id, num_bindings, bindings, pattern_id, used_enodes); 
         }
 
+        void log_axiom_instantiation(literal_vector const& ls);
+
         void log_axiom_instantiation(app * r, unsigned num_blamed_enodes, enode ** blamed_enodes) {
             vector<std::tuple<enode *, enode *>> used_enodes;
             for (unsigned i = 0; i < num_blamed_enodes; ++i) {
                 used_enodes.push_back(std::make_tuple(nullptr, blamed_enodes[i]));
             }
             log_axiom_instantiation(r, UINT_MAX, 0, nullptr, UINT_MAX, used_enodes);
+        }
+
+        void log_axiom_unit(app* r) {
+            log_axiom_instantiation(r);
+            m.trace_stream() << "[end-of-instance]\n";
         }
 
     public:
@@ -426,12 +525,25 @@ namespace smt {
            behavior conflicts with a convention used by the theory/family.
         */
         virtual app * mk_eq_atom(expr * lhs, expr * rhs) {
+            ast_manager& m = get_manager();
             if (lhs->get_id() > rhs->get_id())
                 std::swap(lhs, rhs);
+            if (m.are_distinct(lhs, rhs))                
+                return m.mk_false();
+            if (m.are_equal(lhs, rhs))
+                return m.mk_true();
             return get_manager().mk_eq(lhs, rhs);
         }
 
         literal mk_eq(expr * a, expr * b, bool gate_ctx);
+
+        literal mk_preferred_eq(expr* a, expr* b);
+
+        literal mk_literal(expr* e);
+
+        enode* ensure_enode(expr* e);
+
+        enode* get_root(expr* e) { return ensure_enode(e)->get_root(); }
 
         // -----------------------------------
         //
@@ -501,5 +613,4 @@ namespace smt {
     
 };
 
-#endif /* SMT_THEORY_H_ */
 

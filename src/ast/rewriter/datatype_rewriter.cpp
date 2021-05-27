@@ -70,24 +70,25 @@ br_status datatype_rewriter::mk_app_core(func_decl * f, unsigned num_args, expr 
             return BR_FAILED;
         app * a = to_app(args[0]);
         func_decl * c_decl = a->get_decl();
-        if (c_decl != m_util.get_accessor_constructor(f)) {
+        func_decl * acc = m_util.get_update_accessor(f);
+        if (c_decl != m_util.get_accessor_constructor(acc)) {
             result = a;
             return BR_DONE;
         }
-        ptr_vector<func_decl> const & acc = *m_util.get_constructor_accessors(c_decl);
-        SASSERT(acc.size() == a->get_num_args());
-        unsigned num = acc.size();
+        ptr_vector<func_decl> const & accs = *m_util.get_constructor_accessors(c_decl);
+        SASSERT(accs.size() == a->get_num_args());
+        unsigned num = accs.size();
         ptr_buffer<expr> new_args;
         for (unsigned i = 0; i < num; ++i) {
             
-            if (f == acc[i]) {
+            if (acc == accs[i]) {
                 new_args.push_back(args[1]);
             }
             else {
                 new_args.push_back(a->get_arg(i));
             }
         }
-        result = m().mk_app(c_decl, num, new_args.c_ptr());
+        result = m().mk_app(c_decl, num, new_args.data());
         return BR_DONE;        
     }
     default:
@@ -136,6 +137,6 @@ br_status datatype_rewriter::mk_eq_core(expr * lhs, expr * rhs, expr_ref & resul
     for (unsigned i = 0; i < num; ++i) {            
         eqs.push_back(m().mk_eq(to_app(lhs)->get_arg(i), to_app(rhs)->get_arg(i)));
     }
-    result = m().mk_and(eqs.size(), eqs.c_ptr());
+    result = m().mk_and(eqs.size(), eqs.data());
     return BR_REWRITE2;
 }

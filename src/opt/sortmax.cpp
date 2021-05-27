@@ -67,7 +67,7 @@ namespace opt {
                     --n;
                 }
             }
-            m_sort.sorting(in.size(), in.c_ptr(), out);
+            m_sort.sorting(in.size(), in.data(), out);
 
             // initialize sorting network outputs using the initial assignment.
             unsigned first = 0;
@@ -90,7 +90,7 @@ namespace opt {
                 s().assert_expr(out[first]);
                 is_sat = s().check_sat(0, nullptr);
                 TRACE("opt", tout << is_sat << "\n"; s().display(tout); tout << "\n";);
-                if (m.canceled()) {
+                if (!m.inc()) {
                     is_sat = l_undef;
                 }
                 if (is_sat == l_true) {

@@ -19,7 +19,6 @@ Notes:
 #include "tactic/aig/aig.h"
 #include "tactic/goal.h"
 #include "ast/ast_smt2_pp.h"
-#include "util/cooperate.h"
 
 #define USE_TWO_LEVEL_RULES
 #define FIRST_NODE_ID (UINT_MAX/2)
@@ -127,9 +126,8 @@ struct aig_manager::imp {
     void checkpoint() {
         if (memory::get_allocation_size() > m_max_memory)
             throw aig_exception(TACTIC_MAX_MEMORY_MSG);
-        if (m().canceled())
+        if (!m().inc())
             throw aig_exception(m().limit().get_cancel_msg());
-        cooperate("aig");
     }
 
     void dec_ref_core(aig_lit const & r) { dec_ref_core(r.ptr()); }
@@ -548,14 +546,34 @@ struct aig_manager::imp {
         }
 
         void mk_iff(unsigned spos) {
+            if (spos + 2 != m_result_stack.size())
+                throw default_exception("aig conversion assumes expressions have been simplified");
             SASSERT(spos + 2 == m_result_stack.size());
             aig_lit r = m.mk_iff(m_result_stack[spos], m_result_stack[spos+1]);
             save_node_result(spos, r);
         }
         
         void mk_xor(unsigned spos) {
-            SASSERT(spos + 2 == m_result_stack.size());
-            aig_lit r = m.mk_xor(m_result_stack[spos], m_result_stack[spos+1]);
+            SASSERT(spos <= m_result_stack.size());
+            unsigned num = m_result_stack.size() - spos;
+            aig_lit r;
+            switch (num) {
+            case 0:
+                r = m.m_true;
+                break;
+            case 1:
+                r = m_result_stack[spos];
+                break;
+            case 2:
+                r = m.mk_xor(m_result_stack[spos], m_result_stack[spos+1]);                
+                break;
+            default:
+                r = m.mk_xor(m_result_stack[spos], m_result_stack[spos+1]);
+                for (unsigned i = 2; i < num; ++i) {
+                    r = m.mk_xor(r, m_result_stack[spos + i]);
+                }
+                break;
+            }
             save_node_result(spos, r);
         }
 
@@ -852,7 +870,7 @@ struct aig_manager::imp {
                 add_child(left(t));
                 add_child(right(t));
             }
-            expr * r = ast_mng.mk_not(ast_mng.mk_or(m_and_children.size(), m_and_children.c_ptr()));
+            expr * r = ast_mng.mk_not(ast_mng.mk_or(m_and_children.size(), m_and_children.data()));
             cache_result(n, r);
             TRACE("aig2expr", tout << "caching AND "; m.display_ref(tout, n); tout << "\n";);
         }
@@ -1041,7 +1059,7 @@ struct aig_manager::imp {
         }
 
         void reset_saved() {
-            m.dec_array_ref(m_saved.size(), m_saved.c_ptr());
+            m.dec_array_ref(m_saved.size(), m_saved.data());
             m_saved.finalize();
         }
 
@@ -1582,7 +1600,7 @@ public:
                 }
             }
         }
-        unmark(queue.size(), queue.c_ptr());
+        unmark(queue.size(), queue.data());
     }
 
     void display_smt2_ref(std::ostream & out, aig_lit const & r) const {
@@ -1617,9 +1635,9 @@ public:
             bool visited = true;
             for (unsigned i = 0; i < 2; i++) {
                 aig_lit c = t->m_children[i];
-                aig * c_ptr = c.ptr();
-                if (!c_ptr->m_mark) {
-                    todo.push_back(c_ptr);
+                aig * data = c.ptr();
+                if (!data->m_mark) {
+                    todo.push_back(data);
                     visited = false;
                 }
             }
@@ -1638,7 +1656,7 @@ public:
         out << "(assert ";
         display_smt2_ref(out, r);
         out << ")\n";
-        unmark(to_unmark.size(), to_unmark.c_ptr());
+        unmark(to_unmark.size(), to_unmark.data());
     }
 
     unsigned get_num_aigs() const {

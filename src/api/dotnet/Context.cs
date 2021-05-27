@@ -218,7 +218,6 @@ namespace Microsoft.Z3
         /// </summary>
         public BitVecSort MkBitVecSort(uint size)
         {
-
             return new BitVecSort(this, Native.Z3_mk_bv_sort(nCtx, size));
         }
 
@@ -2453,6 +2452,28 @@ namespace Microsoft.Z3
         }
 
         /// <summary>
+        /// Check if the string s1 is lexicographically strictly less than s2.
+        /// </summary>
+	public BoolExpr MkStringLt(SeqExpr s1, SeqExpr s2) 
+        {
+            Debug.Assert(s1 != null);
+            Debug.Assert(s2 != null);
+            CheckContextMatch(s1, s2);
+            return new BoolExpr(this, Native.Z3_mk_str_lt(nCtx, s1.NativeObject, s2.NativeObject));
+        }
+
+        /// <summary>
+        /// Check if the string s1 is lexicographically strictly less than s2.
+        /// </summary>
+	public BoolExpr MkStringLe(SeqExpr s1, SeqExpr s2) 
+        {
+            Debug.Assert(s1 != null);
+            Debug.Assert(s2 != null);
+            CheckContextMatch(s1, s2);
+            return new BoolExpr(this, Native.Z3_mk_str_le(nCtx, s1.NativeObject, s2.NativeObject));
+        }
+
+        /// <summary>
         /// Retrieve sequence of length one at index.
         /// </summary>
         public SeqExpr MkAt(SeqExpr s, Expr index)
@@ -2466,12 +2487,12 @@ namespace Microsoft.Z3
         /// <summary>
         /// Retrieve element at index.
         /// </summary>
-        public SeqExpr MkNth(SeqExpr s, Expr index)
+        public Expr MkNth(SeqExpr s, Expr index)
         {
             Debug.Assert(s != null);
             Debug.Assert(index != null);
             CheckContextMatch(s, index);
-            return new SeqExpr(this, Native.Z3_mk_seq_nth(nCtx, s.NativeObject, index.NativeObject));
+            return Expr.Create(this, Native.Z3_mk_seq_nth(nCtx, s.NativeObject, index.NativeObject));
         }
 
         /// <summary>
@@ -2614,6 +2635,7 @@ namespace Microsoft.Z3
 
         /// <summary>
         /// Create the empty regular expression.
+	/// The sort s should be a regular expression.
         /// </summary>
         public ReExpr MkEmptyRe(Sort s) 
         {
@@ -2623,6 +2645,7 @@ namespace Microsoft.Z3
 
         /// <summary>
         /// Create the full regular expression.
+	/// The sort s should be a regular expression.
         /// </summary>
         public ReExpr MkFullRe(Sort s) 
         {
@@ -4785,16 +4808,6 @@ namespace Microsoft.Z3
         {
             // Console.WriteLine("Context Finalizer from " + System.Threading.Thread.CurrentThread.ManagedThreadId);
             Dispose();
-
-            if (refCount == 0 && m_ctx != IntPtr.Zero)
-            {
-                m_n_err_handler = null;
-                IntPtr ctx = m_ctx;
-                m_ctx = IntPtr.Zero;
-                Native.Z3_del_context(ctx);
-            }
-            else
-                GC.ReRegisterForFinalize(this);
         }
 
         /// <summary>
@@ -4824,6 +4837,15 @@ namespace Microsoft.Z3
             m_intSort = null;
             m_realSort = null;
             m_stringSort = null;
+            if (refCount == 0 && m_ctx != IntPtr.Zero)
+            {
+                m_n_err_handler = null;
+                IntPtr ctx = m_ctx;
+                m_ctx = IntPtr.Zero;
+                Native.Z3_del_context(ctx);
+            }
+            else 
+                GC.ReRegisterForFinalize(this);
         }
         #endregion
     }

@@ -89,7 +89,6 @@ extern "C" {
         CHECK_NON_NULL(m, nullptr);
         func_interp * _fi       = to_model_ref(m)->get_func_interp(to_func_decl(f));
         if (!_fi) {
-            SET_ERROR_CODE(Z3_INVALID_ARG, nullptr);
             RETURN_Z3(nullptr);
         }
         Z3_func_interp_ref * fi = alloc(Z3_func_interp_ref, *mk_c(c), to_model_ref(m));
@@ -162,14 +161,16 @@ extern "C" {
         model * _m = to_model_ref(m);
         params_ref p;
         ast_manager& mgr = mk_c(c)->m();
-        _m->set_solver(alloc(api::seq_expr_solver, mgr, p));
+        if (!_m->has_solver()) {
+            _m->set_solver(alloc(api::seq_expr_solver, mgr, p));
+        }
         expr_ref result(mgr);
         model::scoped_model_completion _scm(*_m, model_completion);
         result = (*_m)(to_expr(t));
         mk_c(c)->save_ast_trail(result.get());
         *v = of_ast(result.get());
         RETURN_Z3_model_eval true;
-        Z3_CATCH_RETURN(0);
+        Z3_CATCH_RETURN(false);
     }
 
     unsigned Z3_API Z3_model_get_num_sorts(Z3_context c, Z3_model m) {
@@ -366,7 +367,7 @@ extern "C" {
             return;
         }
         // check sorts of value
-        expr* const* _args = (expr* const*) to_ast_vector_ref(args).c_ptr();
+        expr* const* _args = (expr* const*) to_ast_vector_ref(args).data();
         _fi->insert_entry(_args, _value);
         Z3_CATCH;
     }
@@ -420,44 +421,7 @@ extern "C" {
         expr * r = to_func_entry(e)->m_func_entry->get_arg(i);
         RETURN_Z3(of_expr(r));
         Z3_CATCH_RETURN(nullptr);
-    }    
-
-    unsigned get_model_func_num_entries_core(Z3_context c, Z3_model m, unsigned i) {
-        RESET_ERROR_CODE();
-        CHECK_NON_NULL(m, 0);
-        Z3_func_decl d = get_model_func_decl_core(c, m, i);
-        if (d) {
-            model * _m = to_model_ref(m);            
-            func_interp * g = _m->get_func_interp(to_func_decl(d));
-            if (g) {
-                return g->num_entries();
-            }
-            SET_ERROR_CODE(Z3_IOB, nullptr);
-            return 0;
-        }
-        return 0;
     }
-    
-
-    unsigned get_model_func_entry_num_args_core(Z3_context c,
-                                                Z3_model m,
-                                                unsigned i,
-                                                unsigned j) {
-        RESET_ERROR_CODE();
-        CHECK_NON_NULL(m, 0);
-        if (j >= get_model_func_num_entries_core(c, m, i)) {
-            SET_ERROR_CODE(Z3_IOB, nullptr);
-            return 0;
-        }
-        Z3_func_decl d = get_model_func_decl_core(c, m, i);
-        if (d) {
-            model * _m = to_model_ref(m);
-            func_interp * g = _m->get_func_interp(to_func_decl(d));
-            return g->get_arity();
-        }
-        return 0;
-    }
-    
 
     Z3_API char const * Z3_model_to_string(Z3_context c, Z3_model m) {
         Z3_TRY;

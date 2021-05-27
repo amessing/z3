@@ -28,7 +28,7 @@ namespace smt {
     */
     clause * clause::mk(ast_manager & m, unsigned num_lits, literal * lits, clause_kind k, justification * js,
                         clause_del_eh * del_eh, bool save_atoms, expr * const * bool_var2expr_map) {
-        SASSERT(k == CLS_AUX || js == 0 || !js->in_region());
+        SASSERT(smt::is_axiom(k) || js == nullptr || !js->in_region());
         SASSERT(num_lits >= 2);
         unsigned sz                = get_obj_size(num_lits, k, save_atoms, del_eh != nullptr, js != nullptr);
         void * mem                 = m.get_allocator().allocate(sz);
@@ -63,7 +63,7 @@ namespace smt {
             SASSERT(cls->get_del_eh() == del_eh);
             SASSERT(cls->get_justification() == js);
             for (unsigned i = 0; i < num_lits; i++) {
-                SASSERT(cls->get_literal(i) == lits[i]);
+                SASSERT((*cls)[i] == lits[i]);
                 SASSERT(!save_atoms || cls->get_atom(i) == bool_var2expr_map[lits[i].var()]);
             }});
         return cls;
@@ -101,7 +101,7 @@ namespace smt {
         out << "(clause";
         for (unsigned i = 0; i < m_num_literals; i++) {
             out << " ";
-            m_lits[i].display(out, m, bool_var2expr_map);
+            smt::display(out, m_lits[i], m, bool_var2expr_map);
         }
         return out << ")";
     }
@@ -110,7 +110,7 @@ namespace smt {
         out << "(clause";
         for (unsigned i = 0; i < m_num_literals; i++) {
             out << " ";
-            m_lits[i].display_compact(out, bool_var2expr_map);
+            smt::display_compact(out, m_lits[i], bool_var2expr_map);
         }
         return out << ")";
     }
@@ -122,8 +122,8 @@ namespace smt {
             args.push_back(bool_var2expr_map[lit.var()]);
             if (lit.sign()) args[args.size()-1] = m.mk_not(args.back());
         }
-        expr_ref disj(m.mk_or(args.size(), args.c_ptr()), m);
-        return out << disj;
+        expr_ref disj(m.mk_or(args.size(), args.data()), m);
+        return out << mk_pp(disj, m, 3);
     }
 
 };

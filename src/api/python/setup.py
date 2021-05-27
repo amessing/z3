@@ -5,6 +5,7 @@ import platform
 import subprocess
 import multiprocessing
 import re
+import glob
 from setuptools import setup
 from distutils.util import get_platform
 from distutils.errors import LibError
@@ -19,19 +20,40 @@ build_env = dict(os.environ)
 build_env['PYTHON'] = sys.executable
 build_env['CXXFLAGS'] = build_env.get('CXXFLAGS', '') + " -std=c++11"
 
+# determine where we're building and where sources are
 ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 SRC_DIR_LOCAL = os.path.join(ROOT_DIR, 'core')
 SRC_DIR_REPO = os.path.join(ROOT_DIR, '..', '..', '..')
 SRC_DIR = SRC_DIR_LOCAL if os.path.exists(SRC_DIR_LOCAL) else SRC_DIR_REPO
-BUILD_DIR = os.path.join(SRC_DIR, 'build') # implicit in configure script
+
+# determine where binaries are
+RELEASE_DIR = os.environ.get('PACKAGE_FROM_RELEASE', None)
+if RELEASE_DIR is None:
+    BUILD_DIR = os.path.join(SRC_DIR, 'build') # implicit in configure script
+    HEADER_DIRS = [os.path.join(SRC_DIR, 'src', 'api'), os.path.join(SRC_DIR, 'src', 'api', 'c++')]
+    RELEASE_METADATA = None
+    BUILD_PLATFORM = sys.platform
+else:
+    if not os.path.isdir(RELEASE_DIR):
+        raise Exception("RELEASE_DIR (%s) is not a directory!" % RELEASE_DIR)
+    BUILD_DIR = os.path.join(RELEASE_DIR, 'bin')
+    HEADER_DIRS = [os.path.join(RELEASE_DIR, 'include')]
+    RELEASE_METADATA = os.path.basename(RELEASE_DIR).split('-')
+    if RELEASE_METADATA[0] != 'z3' or len(RELEASE_METADATA) not in (4, 5):
+        raise Exception("RELEASE_DIR (%s) must be in the format z3-version-arch-os[-osversion] so we can extract metadata from it. Sorry!" % RELEASE_DIR)
+    RELEASE_METADATA.pop(0)
+    BUILD_PLATFORM = RELEASE_METADATA[2]
+
+# determine where destinations are
 LIBS_DIR = os.path.join(ROOT_DIR, 'z3', 'lib')
 HEADERS_DIR = os.path.join(ROOT_DIR, 'z3', 'include')
 BINS_DIR = os.path.join(ROOT_DIR, 'bin')
 
-if sys.platform == 'darwin':
+# determine platform-specific filenames
+if BUILD_PLATFORM in ('darwin', 'osx'):
     LIBRARY_FILE = "libz3.dylib"
     EXECUTABLE_FILE = "z3"
-elif sys.platform in ('win32', 'cygwin'):
+elif BUILD_PLATFORM in ('win32', 'cygwin', 'win'):
     LIBRARY_FILE = "libz3.dll"
     EXECUTABLE_FILE = "z3.exe"
 else:
@@ -58,25 +80,58 @@ def _clean_native_build():
 
 def _z3_version():
     post = os.getenv('Z3_VERSION_SUFFIX', '')
-    fn = os.path.join(SRC_DIR, 'scripts', 'mk_project.py')
-    if os.path.exists(fn):
-        with open(fn) as f:
-            for line in f:
-                n = re.match(".*set_version\((.*), (.*), (.*), (.*)\).*", line)
-                if not n is None:
-                    return n.group(1) + '.' + n.group(2) + '.' + n.group(3) + '.' + n.group(4) + post
-    return "?.?.?.?"
+    if RELEASE_DIR is None:
+        fn = os.path.join(SRC_DIR, 'scripts', 'mk_project.py')
+        if os.path.exists(fn):
+            with open(fn) as f:
+                for line in f:
+                    n = re.match(r".*set_version\((.*), (.*), (.*), (.*)\).*", line)
+                    if not n is None:
+                        return n.group(1) + '.' + n.group(2) + '.' + n.group(3) + '.' + n.group(4) + post
+        return "?.?.?.?"
+    else:
+        version = RELEASE_METADATA[0]
+        if version.count('.') == 2:
+            version += '.0'
+        return version + post
 
 def _configure_z3():
     # bail out early if we don't need to do this - it forces a rebuild every time otherwise
     if os.path.exists(BUILD_DIR):
         return
-    args = [sys.executable, os.path.join(SRC_DIR, 'scripts', 'mk_make.py')]
-
-    if sys.platform == 'win32' and platform.architecture()[0] == '64bit':
-        args += ['-x']
-
-    if subprocess.call(args, env=build_env, cwd=SRC_DIR) != 0:
+    else:
+        os.mkdir(BUILD_DIR)
+    # Config options
+    cmake_options = {
+        # Config Options
+        'Z3_SINGLE_THREADED' : False,
+        'Z3_BUILD_PYTHON_BINDINGS' : True,
+        # Build Options
+        'CMAKE_BUILD_TYPE' : 'Release',
+        'Z3_BUILD_EXECUTABLE' : True,
+        'Z3_BUILD_LIBZ3_SHARED' : True,
+        'Z3_LINK_TIME_OPTIMIZATION' : True,
+        'WARNINGS_AS_ERRORS' : 'SERIOUS_ONLY',
+        # Disable Unwanted Options
+        'Z3_USE_LIB_GMP' : False, # Is default false in python build
+        'Z3_INCLUDE_GIT_HASH' : False, # Can be changed if we bundle the .git as well
+        'Z3_INCLUDE_GIT_DESCRIBE' : False,
+        'Z3_SAVE_CLANG_OPTIMIZATION_RECORDS' : False,
+        'Z3_ENABLE_TRACING_FOR_NON_DEBUG' : False,
+        'Z3_ENABLE_EXAMPLE_TARGETS' : False,
+        'Z3_ENABLE_CFI' : False,
+        'Z3_BUILD_DOCUMENTATION' : False,
+        'Z3_BUILD_TEST_EXECUTABLES' : False,
+        'Z3_BUILD_DOTNET_BINDINGS' : False,
+        'Z3_BUILD_JAVA_BINDINGS' : False
+    }
+    # Convert cmake options to CLI arguments
+    for key, val in cmake_options.items():
+        if type(val) is bool:
+            cmake_options[key] = str(val).upper()
+    cmake_args = [ '-D' + key + '=' + value for key,value in cmake_options.items() ]
+    args = [ 'cmake', *cmake_args, SRC_DIR ]
+    if subprocess.call(args, env=build_env, cwd=BUILD_DIR) != 0:
         raise LibError("Unable to configure Z3.")
 
 def _build_z3():
@@ -86,8 +141,9 @@ def _build_z3():
             raise LibError("Unable to build Z3.")
     else:   # linux and macOS
         if subprocess.call(['make', '-j', str(multiprocessing.cpu_count())],
-                    env=build_env, cwd=BUILD_DIR) != 0:
+                env=build_env, cwd=BUILD_DIR) != 0:
             raise LibError("Unable to build Z3.")
+
 
 def _copy_bins():
     """
@@ -98,23 +154,35 @@ def _copy_bins():
 
     _clean_bins()
 
-    if SRC_DIR == SRC_DIR_LOCAL:
-        shutil.copy(os.path.join(SRC_DIR, 'src', 'api', 'python', 'z3', 'z3core.py'), os.path.join(ROOT_DIR, 'z3'))
-        shutil.copy(os.path.join(SRC_DIR, 'src', 'api', 'python', 'z3', 'z3consts.py'), os.path.join(ROOT_DIR, 'z3'))
+    python_dir = None
+    if RELEASE_DIR is not None:
+        python_dir = os.path.join(RELEASE_DIR, 'bin', 'python')
+    elif SRC_DIR == SRC_DIR_LOCAL:
+        python_dir = os.path.join(SRC_DIR, 'src', 'api', 'python')
+    if python_dir is not None:
+        py_z3_build_dir = os.path.join(BUILD_DIR, 'python', 'z3')
+        root_z3_dir = os.path.join(ROOT_DIR, 'z3')
+        shutil.copy(os.path.join(py_z3_build_dir, 'z3core.py'), root_z3_dir)
+        shutil.copy(os.path.join(py_z3_build_dir, 'z3consts.py'), root_z3_dir)
 
     # STEP 2: Copy the shared library, the executable and the headers
 
     os.mkdir(LIBS_DIR)
     os.mkdir(BINS_DIR)
     os.mkdir(HEADERS_DIR)
-    os.mkdir(os.path.join(HEADERS_DIR, 'c++'))
     shutil.copy(os.path.join(BUILD_DIR, LIBRARY_FILE), LIBS_DIR)
     shutil.copy(os.path.join(BUILD_DIR, EXECUTABLE_FILE), BINS_DIR)
+    path1 = glob.glob(os.path.join(BUILD_DIR, "msvcp*"))
+    path2 = glob.glob(os.path.join(BUILD_DIR, "vcomp*"))
+    path3 = glob.glob(os.path.join(BUILD_DIR, "vcrun*"))
+    for filepath in path1 + path2 + path3:
+        shutil.copy(filepath, LIBS_DIR)
 
-    header_files = [x for x in os.listdir(os.path.join(SRC_DIR, 'src', 'api')) if x.endswith('.h')]
-    header_files += [os.path.join('c++', x) for x in os.listdir(os.path.join(SRC_DIR, 'src', 'api', 'c++')) if x.endswith('.h')]
-    for fname in header_files:
-        shutil.copy(os.path.join(SRC_DIR, 'src', 'api', fname), os.path.join(HEADERS_DIR, fname))
+    for header_dir in HEADER_DIRS:
+        for fname in os.listdir(header_dir):
+            if not fname.endswith('.h'):
+                continue
+            shutil.copy(os.path.join(header_dir, fname), os.path.join(HEADERS_DIR, fname))
 
 def _copy_sources():
     """
@@ -125,21 +193,24 @@ def _copy_sources():
     os.mkdir(SRC_DIR_LOCAL)
 
     shutil.copy(os.path.join(SRC_DIR_REPO, 'LICENSE.txt'), SRC_DIR_LOCAL)
+    shutil.copy(os.path.join(SRC_DIR_REPO, 'z3.pc.cmake.in'), SRC_DIR_LOCAL)
+    shutil.copy(os.path.join(SRC_DIR_REPO, 'CMakeLists.txt'), SRC_DIR_LOCAL)
+    shutil.copytree(os.path.join(SRC_DIR_REPO, 'cmake'), os.path.join(SRC_DIR_LOCAL, 'cmake'))
     shutil.copytree(os.path.join(SRC_DIR_REPO, 'scripts'), os.path.join(SRC_DIR_LOCAL, 'scripts'))
-    shutil.copytree(os.path.join(SRC_DIR_REPO, 'examples'), os.path.join(SRC_DIR_LOCAL, 'examples'))
-    shutil.copytree(os.path.join(SRC_DIR_REPO, 'src'), os.path.join(SRC_DIR_LOCAL, 'src'),
-            ignore=lambda src, names: ['python'] if 'api' in src else [])
 
-    # stub python dir to make build happy
-    os.mkdir(os.path.join(SRC_DIR_LOCAL, 'src', 'api', 'python'))
-    os.mkdir(os.path.join(SRC_DIR_LOCAL, 'src', 'api', 'python', 'z3'))
-    open(os.path.join(SRC_DIR_LOCAL, 'src', 'api', 'python', 'z3', '.placeholder'), 'w').close()
-    open(os.path.join(SRC_DIR_LOCAL, 'src', 'api', 'python', 'z3test.py'), 'w').close()
+    # Copy in src, but avoid recursion
+    def ignore_python_setup_files(src, _):
+        if os.path.normpath(src).endswith('api/python'):
+            return ['core', 'dist', 'MANIFEST', 'MANIFEST.in', 'setup.py', 'z3_solver.egg-info']
+        return []
+    shutil.copytree(os.path.join(SRC_DIR_REPO, 'src'), os.path.join(SRC_DIR_LOCAL, 'src'),
+            ignore=ignore_python_setup_files)
 
 class build(_build):
     def run(self):
-        self.execute(_configure_z3, (), msg="Configuring Z3")
-        self.execute(_build_z3, (), msg="Building Z3")
+        if RELEASE_DIR is None:
+            self.execute(_configure_z3, (), msg="Configuring Z3")
+            self.execute(_build_z3, (), msg="Building Z3")
         self.execute(_copy_bins, (), msg="Copying binaries")
         _build.run(self)
 
@@ -172,23 +243,53 @@ class clean(_clean):
 #except OSError: pass
 
 if 'bdist_wheel' in sys.argv and '--plat-name' not in sys.argv:
+    if RELEASE_DIR is None:
+        name = get_platform()
+        if 'linux' in name:
+            # linux_* platform tags are disallowed because the python ecosystem is fubar
+            # linux builds should be built in the centos 5 vm for maximum compatibility
+            # see https://github.com/pypa/manylinux
+            # see also https://github.com/angr/angr-dev/blob/master/admin/bdist.py
+            plat_name = 'manylinux1_' + platform.machine()
+        elif 'mingw' in name:
+            if platform.architecture()[0] == '64bit':
+                plat_name = 'win_amd64'
+            else:
+                plat_name ='win32'
+        else:
+            # https://www.python.org/dev/peps/pep-0425/
+            plat_name = name.replace('.', '_').replace('-', '_')
+    else:
+        # extract the architecture of the release from the directory name
+        arch = RELEASE_METADATA[1]
+        distos = RELEASE_METADATA[2]
+        if distos in ('debian', 'ubuntu') or 'linux' in distos:
+            raise Exception("Linux binary distributions must be built on centos to conform to PEP 513")
+        elif distos == 'glibc':
+            if arch == 'x64':
+                plat_name = 'manylinux1_x86_64'
+            else:
+                plat_name = 'manylinux1_i686'
+        elif distos == 'win':
+            if arch == 'x64':
+                plat_name = 'win_amd64'
+            else:
+                plat_name = 'win32'
+        elif distos == 'osx':
+            osver = RELEASE_METADATA[3]
+            if osver.count('.') > 1:
+                osver = '.'.join(osver.split('.')[:2])
+            if arch == 'x64':
+                plat_name ='macosx_%s_x86_64' % osver.replace('.', '_')
+            else:
+                raise Exception(f"idk how os {distos} {osver} works. what goes here?")
+        else:
+            raise Exception(f"idk how to translate between this z3 release os {distos} and the python naming scheme")
+
     idx = sys.argv.index('bdist_wheel') + 1
     sys.argv.insert(idx, '--plat-name')
-    name = get_platform()
-    if 'linux' in name:
-        # linux_* platform tags are disallowed because the python ecosystem is fubar
-        # linux builds should be built in the centos 5 vm for maximum compatibility
-        # see https://github.com/pypa/manylinux
-        # see also https://github.com/angr/angr-dev/blob/master/admin/bdist.py
-        sys.argv.insert(idx + 1, 'manylinux1_' + platform.machine())
-    elif 'mingw' in name:
-        if platform.architecture()[0] == '64bit':
-            sys.argv.insert(idx + 1, 'win_amd64')
-        else:
-            sys.argv.insert(idx + 1, 'win32')
-    else:
-        # https://www.python.org/dev/peps/pep-0425/
-        sys.argv.insert(idx + 1, name.replace('.', '_').replace('-', '_'))
+    sys.argv.insert(idx + 1, plat_name)
+    sys.argv.insert(idx + 2, '--universal')   # supports py2+py3. if --plat-name is not specified this will also mean that the package can be installed on any machine regardless of architecture, so watch out!
 
 
 setup(

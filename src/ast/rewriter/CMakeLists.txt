@@ -8,6 +8,7 @@ z3_add_component(rewriter
     bv_bounds.cpp
     bv_elim.cpp
     bv_rewriter.cpp
+    cached_var_subst.cpp
     datatype_rewriter.cpp
     der.cpp
     distribute_forall.cpp
@@ -29,22 +30,19 @@ z3_add_component(rewriter
     pb2bv_rewriter.cpp
     push_app_ite.cpp
     quant_hoist.cpp
+    recfun_rewriter.cpp
     rewriter.cpp
+    seq_axioms.cpp
+    seq_eq_solver.cpp
     seq_rewriter.cpp
+    seq_skolem.cpp
     th_rewriter.cpp
+    value_sweep.cpp
     var_subst.cpp
-    bv_trailing.cpp
     mk_extract_proc.cpp
   COMPONENT_DEPENDENCIES
     ast
+    params
     automata
     polynomial
-  PYG_FILES
-    arith_rewriter_params.pyg
-    array_rewriter_params.pyg
-    bool_rewriter_params.pyg
-    bv_rewriter_params.pyg
-    fpa_rewriter_params.pyg
-    poly_rewriter_params.pyg
-    rewriter_params.pyg
 )

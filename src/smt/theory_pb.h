@@ -97,6 +97,7 @@ namespace smt {
             unsigned m_num_conflicts;
             unsigned m_num_propagations;
             unsigned m_num_predicates;
+            unsigned m_num_resolves;
             void reset() { memset(this, 0, sizeof(*this)); }
             stats() { reset(); }
         };
@@ -270,6 +271,7 @@ namespace smt {
 
         svector<var_info>        m_var_infos; 
         mutable unsynch_mpz_manager      m_mpz_mgr;        // Simplex: manager mpz numerals
+        scoped_mpz_vector        m_mpz_trail;
         unsigned_vector          m_ineqs_trail;
         unsigned_vector          m_ineqs_lim;
         literal_vector           m_literals;    // temporary vector
@@ -355,9 +357,9 @@ namespace smt {
         literal_vector    m_antecedents;
         tracked_uint_set  m_active_var_set;
         expr_ref_vector   m_antecedent_exprs;
-        svector<bool>     m_antecedent_signs;
+        bool_vector     m_antecedent_signs;
         expr_ref_vector   m_cardinality_exprs;
-        svector<bool>     m_cardinality_signs;
+        bool_vector     m_cardinality_signs;
 
         void normalize_active_coeffs();
         void inc_coeff(literal l, int offset);
@@ -403,7 +405,7 @@ namespace smt {
         justification* justify(literal_vector const& lits);
 
     public:
-        theory_pb(ast_manager& m, theory_pb_params& p);
+        theory_pb(context& ctx);
         
         ~theory_pb() override;
 

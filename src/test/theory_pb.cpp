@@ -40,7 +40,7 @@ public:
         for (unsigned i = 0; i < N; ++i) {
             std::stringstream strm;
             strm << "b" << i;
-            vars.push_back(m.mk_const(symbol(strm.str().c_str()), m.mk_bool_sort()));
+            vars.push_back(m.mk_const(symbol(strm.str()), m.mk_bool_sort()));
             std::cout << "(declare-const " << strm.str() << " Bool)\n";
         }
     }
@@ -72,7 +72,7 @@ private:
                     k += coeffs[i];
                 }
             }       
-            fml = pb.mk_ge(args.size(), coeffs.c_ptr(), args.c_ptr(), k);
+            fml = pb.mk_ge(args.size(), coeffs.data(), args.data(), k);
             rw(fml, tmp);
             rw(tmp, tmp);
             if (pb.is_ge(tmp)) {
@@ -90,7 +90,7 @@ private:
     void fuzz_round(unsigned& num_rounds, unsigned lvl) {
         unsigned num_rounds2 = 0;
         lbool is_sat = l_true;    
-        std::cout << "(push)\n";
+        std::cout << "(push 1)\n";
         ctx.push();
         unsigned r = 0;
         while (is_sat == l_true && r <= num_rounds + 1) {
@@ -105,7 +105,7 @@ private:
         num_rounds = r;
         std::cout << "; number of rounds: " << num_rounds << " level: " << lvl << "\n";
         ctx.pop(1);
-        std::cout << "(pop)\n";
+        std::cout << "(pop 1)\n";
     }
 
 };
@@ -142,7 +142,7 @@ void tst_theory_pb() {
             {
                 smt::context ctx(m, params);
                 ctx.push();
-                smt::literal l = smt::theory_pb::assert_ge(ctx, k+1, lits.size(), lits.c_ptr());
+                smt::literal l = smt::theory_pb::assert_ge(ctx, k+1, lits.size(), lits.data());
                 if (l != smt::false_literal) {
                     ctx.assign(l, nullptr, false);
                     TRACE("pb", tout << "assign: " << l << "\n";
@@ -154,7 +154,7 @@ void tst_theory_pb() {
             {
                 smt::context ctx(m, params);            
                 ctx.push();
-                smt::literal l = smt::theory_pb::assert_ge(ctx, k, lits.size(), lits.c_ptr());
+                smt::literal l = smt::theory_pb::assert_ge(ctx, k, lits.size(), lits.data());
                 ENSURE(l != smt::false_literal);
                 ctx.assign(l, nullptr, false);
                 TRACE("pb", ctx.display(tout););

@@ -16,8 +16,7 @@ Author:
 
 Revision History:
 --*/
-#ifndef SHARED_OCCS_H_
-#define SHARED_OCCS_H_
+#pragma once
 
 #include "ast/ast.h"
 #include "util/obj_hashtable.h"
@@ -25,8 +24,6 @@ Revision History:
 class shared_occs_mark {
     ptr_buffer<ast> m_to_unmark;
 public:
-    shared_occs_mark() {}
- 
     ~shared_occs_mark() {
         reset();
     }
@@ -77,4 +74,3 @@ public:
     void display(std::ostream & out, ast_manager & mgr) const;
 };
 
-#endif

@@ -263,6 +263,9 @@ sig
   end
   val mk_func_decl : context -> Symbol.symbol -> Sort.sort list -> Sort.sort -> func_decl
   val mk_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl
+  val mk_rec_func_decl : context -> Symbol.symbol -> Sort.sort list -> Sort.sort -> func_decl
+  val mk_rec_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl
+  val add_rec_def : context -> func_decl -> Expr.expr list -> Expr.expr -> unit
   val mk_fresh_func_decl : context -> string -> Sort.sort list -> Sort.sort -> func_decl
   val mk_const_decl : context -> Symbol.symbol -> Sort.sort -> func_decl
   val mk_const_decl_s : context -> string -> Sort.sort -> func_decl
@@ -337,6 +340,15 @@ end = struct
 
   let mk_func_decl_s (ctx:context) (name:string) (domain:Sort.sort list) (range:Sort.sort) =
     mk_func_decl ctx (Symbol.mk_string ctx name) domain range
+
+  let mk_rec_func_decl (ctx:context) (name:Symbol.symbol) (domain:Sort.sort list) (range:Sort.sort) =
+    Z3native.mk_rec_func_decl ctx name (List.length domain) domain range
+
+  let mk_rec_func_decl_s (ctx:context) (name:string) (domain:Sort.sort list) (range:Sort.sort) =
+    mk_rec_func_decl ctx (Symbol.mk_string ctx name) domain range
+
+  let add_rec_def (ctx:context) (f:func_decl) (args:Expr.expr list) (body:Expr.expr) =
+    Z3native.add_rec_def ctx f (List.length args) args body
 
   let mk_fresh_func_decl (ctx:context) (prefix:string) (domain:Sort.sort list) (range:Sort.sort) =
     Z3native.mk_fresh_func_decl ctx prefix (List.length domain) domain range
@@ -1039,7 +1051,7 @@ struct
     let get_big_int (x:expr) =
       if is_int_numeral x then
         let s = (Z3native.get_numeral_string (Expr.gc x) x) in
-        Big_int.big_int_of_string s
+        Z.of_string s
       else
         raise (Error "Conversion failed.")
 
@@ -1063,7 +1075,7 @@ struct
     let get_ratio x =
       if is_rat_numeral x then
         let s = Z3native.get_numeral_string (Expr.gc x) x in
-        Ratio.ratio_of_string s
+        Q.of_string s
       else
         raise (Error "Conversion failed.")
 
@@ -1248,6 +1260,8 @@ struct
   let mk_seq_length = Z3native.mk_seq_length
   let mk_seq_index = Z3native.mk_seq_index
   let mk_str_to_int = Z3native.mk_str_to_int
+  let mk_str_le = Z3native.mk_str_le
+  let mk_str_lt = Z3native.mk_str_lt
   let mk_int_to_str = Z3native.mk_int_to_str
   let mk_seq_to_re = Z3native.mk_seq_to_re
   let mk_seq_in_re = Z3native.mk_seq_in_re
@@ -1546,9 +1560,8 @@ struct
   end
 
   let get_const_interp (x:model) (f:func_decl) =
-    if FuncDecl.get_arity f <> 0 ||
-       (sort_kind_of_int (Z3native.get_sort_kind (FuncDecl.gc f) (Z3native.get_range (FuncDecl.gc f) f))) = ARRAY_SORT then
-      raise (Error "Non-zero arity functions and arrays have FunctionInterpretations as a model. Use FuncInterp.")
+    if FuncDecl.get_arity f <> 0 then
+      raise (Error "Non-zero arity functions have FunctionInterpretations as a model. Use FuncInterp.")
     else
       let np = Z3native.model_get_const_interp (gc x) x f  in
       if Z3native.is_null_ast np then
@@ -1883,8 +1896,6 @@ struct
     | L_FALSE -> Solver.UNSATISFIABLE
     | _ -> Solver.UNKNOWN
 
-  let push x = Z3native.fixedpoint_push (gc x) x
-  let pop x = Z3native.fixedpoint_pop (gc x) x
   let update_rule x = Z3native.fixedpoint_update_rule (gc x) x
 
   let get_answer x =

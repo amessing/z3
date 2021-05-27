@@ -68,6 +68,7 @@ class lia2pb_tactic : public tactic {
                 m_bm.has_upper(n, u, s) &&  
                 l.is_zero() &&
                 !u.is_neg() && 
+                u.is_int() && 
                 u.get_num_bits() <= m_max_bits) {
                 
                 return true;
@@ -133,7 +134,7 @@ class lia2pb_tactic : public tactic {
                     }
                 }
                 else {
-                    sort * s = m_owner.m.get_sort(n);
+                    sort * s = n->get_sort();
                     if (s->get_family_id() == m_owner.m_util.get_family_id())
                         throw_failed(n);
                 }
@@ -184,7 +185,6 @@ class lia2pb_tactic : public tactic {
 
         void operator()(goal_ref const & g, 
                         goal_ref_buffer & result) {
-            SASSERT(g->is_well_sorted());
             fail_if_proof_generation("lia2pb", g);
             m_produce_models      = g->models_enabled();
             m_produce_unsat_cores = g->unsat_core_enabled();
@@ -248,7 +248,7 @@ class lia2pb_tactic : public tactic {
                         a *= rational(2);
                     }
                     SASSERT(def_args.size() > 1);
-                    expr * def = m_util.mk_add(def_args.size(), def_args.c_ptr());
+                    expr * def = m_util.mk_add(def_args.size(), def_args.data());
                     expr_dependency * dep = nullptr;
                     if (m_produce_unsat_cores) {
                         dep = m.mk_join(m_bm.lower_dep(x), m_bm.upper_dep(x));
@@ -270,7 +270,7 @@ class lia2pb_tactic : public tactic {
             expr_ref   new_curr(m);
             proof_ref  new_pr(m);
             unsigned size = g->size();
-            for (unsigned idx = 0; idx < size; idx++) {
+            for (unsigned idx = 0; !g->inconsistent() && idx < size; idx++) {
                 expr * curr = g->form(idx);
                 expr_dependency * dep = nullptr;
                 m_rw(curr, new_curr, new_pr);
@@ -286,8 +286,6 @@ class lia2pb_tactic : public tactic {
             g->inc_depth();
             g->add(gmc.get());
             result.push_back(g.get());
-            TRACE("lia2pb", g->display(tout););
-            SASSERT(g->is_well_sorted());
         }
     };
 

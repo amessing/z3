@@ -16,8 +16,7 @@ Author:
 Revision History:
 
 --*/
-#ifndef REF_VECTOR_H_
-#define REF_VECTOR_H_
+#pragma once
 
 #include "util/vector.h"
 #include "util/obj_ref.h"
@@ -41,38 +40,46 @@ protected:
             dec_ref(*it);
     }
 
+    struct hash_proc {
+        unsigned operator()(ref_vector_core const* v, unsigned idx) const {
+            return (*v)[idx]->get_id();
+        }
+    };
 public:
-    typedef T * data;
+    typedef T * data_t;
 
-    ref_vector_core(Ref const & r = Ref()):Ref(r) {}
+    ref_vector_core() = default;
+    ref_vector_core(Ref const & r) : Ref(r) {}
 
-    ref_vector_core(ref_vector_core && other) :
-        Ref(std::move(other)),
-        m_nodes(std::move(other.m_nodes)) {}
+    ref_vector_core(const ref_vector_core & other) {
+        append(other);
+    }
+
+    ref_vector_core(ref_vector_core &&) noexcept = default;
     
     ~ref_vector_core() {
-        dec_range_ref(m_nodes.begin(), m_nodes.end());
+        dec_range_ref(m_nodes.data(), m_nodes.data() + m_nodes.size());
     }
     
     void reset() {
-        dec_range_ref(m_nodes.begin(), m_nodes.end());
+        dec_range_ref(m_nodes.data(), m_nodes.data() + m_nodes.size());
         m_nodes.reset();
     }
 
     void finalize() {
-        dec_range_ref(m_nodes.begin(), m_nodes.end());
+        dec_range_ref(m_nodes.data(), m_nodes.data() + m_nodes.size());
         m_nodes.finalize();
     }
 
     void resize(unsigned sz) {
         if (sz < m_nodes.size())
-            dec_range_ref(m_nodes.begin() + sz, m_nodes.end());
+            dec_range_ref(m_nodes.data() + sz, m_nodes.data() + m_nodes.size());
         m_nodes.resize(sz);
     }
 
     void resize(unsigned sz, T * d) {
         if (sz < m_nodes.size()) {
-            dec_range_ref(m_nodes.begin() + sz, m_nodes.end());
+            dec_range_ref(m_nodes.data() + sz, m_nodes.data() + m_nodes.size());
             m_nodes.shrink(sz); 
         }
         else {
@@ -123,11 +130,19 @@ public:
 
     T * get(unsigned idx, T * d) const { return m_nodes.get(idx, d); }
 
-    T * const * c_ptr() const { return m_nodes.begin(); }
+    T * const * data() const { return m_nodes.data(); }
 
     typedef T* const* iterator;
 
-    T ** c_ptr() { return m_nodes.begin(); }
+    T ** data() { return m_nodes.data(); }
+
+    unsigned hash() const {
+        unsigned sz = size();
+        if (sz == 0) {
+            return 0;
+        }
+        return get_composite_hash(this, sz, default_kind_hash_proc<ref_vector_core const*>(), hash_proc());
+    }
 
     iterator begin() const { return m_nodes.begin(); }
     iterator end() const { return begin() + size(); }
@@ -176,6 +191,13 @@ public:
             push_back(data[i]);
     }
 
+    void operator=(ref_vector_core && other) {
+        if (this != &other) {
+            reset();
+            m_nodes = std::move(other.m_nodes);
+        }
+    }
+
     void swap(unsigned idx1, unsigned idx2) {
         std::swap(m_nodes[idx1], m_nodes[idx2]);
     }
@@ -219,7 +241,7 @@ public:
         this->append(other);
     }
 
-    ref_vector(ref_vector && other) : super(std::move(other)) {}
+    ref_vector(ref_vector &&) noexcept = default;
 
     ref_vector(TManager & m, unsigned sz, T * const * data):
         super(ref_manager_wrapper<T, TManager>(m)) {
@@ -249,7 +271,6 @@ public:
         }
 
         element_ref & operator=(T * n) {
-            SASSERT(n);
             m_manager.inc_ref(n);
             m_manager.dec_ref(m_ref);
             m_ref = n;
@@ -294,6 +315,8 @@ public:
 
     void set(unsigned idx, T * n) { super::set(idx, n); }
 
+    void setx(unsigned idx, T* n) { super::reserve(idx + 1); super::set(idx, n); }
+
     // enable abuse:
     ref_vector & set(ref_vector const& other) {
         if (this != &other) {
@@ -303,8 +326,7 @@ public:
         return *this;
     }
     
-    // prevent abuse:
-    ref_vector & operator=(ref_vector const & other) = delete;
+    ref_vector & operator=(ref_vector && other) = default;
 
     bool operator==(ref_vector const& other) const {
         if (other.size() != this->size()) return false;
@@ -388,9 +410,8 @@ public:
 /**
    \brief Vector of unmanaged references.
 */
-template<typename T> 
-class sref_vector : public ref_vector_core<T, ref_unmanaged_wrapper<T> > {
-};
+template<typename T>
+using sref_vector = ref_vector_core<T, ref_unmanaged_wrapper<T>>;
 
 /**
    \brief Hash utilities on ref_vector pointers.
@@ -401,21 +422,8 @@ struct ref_vector_ptr_hash {
 
     typedef ref_vector<T,TM> RefV;
 
-    struct hash_proc {
-        unsigned operator()(RefV* v, unsigned idx) const {
-            return (*v)[idx]->get_id();
-        }
-    };
-
     unsigned operator()(RefV* v) const {
-        if (!v) {
-            return 0;
-        }
-        unsigned sz = v->size();
-        if (sz == 0) {
-            return 0;
-        }
-        return get_composite_hash(v, sz, default_kind_hash_proc<RefV*>(), hash_proc());
+        return v ? v->hash() : 0;
     }
 };
 
@@ -441,6 +449,3 @@ struct ref_vector_ptr_eq {
         return true;
     }
 };
-
-
-#endif /* REF_VECTOR_H_ */

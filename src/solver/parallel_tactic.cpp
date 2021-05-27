@@ -28,11 +28,8 @@ Notes:
  
 --*/
 
-#include <thread>
-#include <mutex>
-#include <cmath>
-#include <condition_variable>
 #include "util/scoped_ptr_vector.h"
+#include "ast/ast_pp.h"
 #include "ast/ast_util.h"
 #include "ast/ast_translation.h"
 #include "solver/solver.h"
@@ -41,6 +38,20 @@ Notes:
 #include "tactic/tactical.h"
 #include "solver/parallel_tactic.h"
 #include "solver/parallel_params.hpp"
+
+#ifdef SINGLE_THREAD
+
+tactic * mk_parallel_tactic(solver* s, params_ref const& p) {
+    throw default_exception("parallel tactic is disabled in single threaded mode");
+}
+
+#else
+
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <cmath>
+#include <condition_variable>
 
 class parallel_tactic : public tactic {
 
@@ -53,7 +64,7 @@ class parallel_tactic : public tactic {
         ptr_vector<solver_state>     m_tasks;
         ptr_vector<solver_state>     m_active;
         unsigned                     m_num_waiters;
-        volatile bool                m_shutdown;
+        std::atomic<bool>            m_shutdown;
 
         void inc_wait() {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -136,11 +147,22 @@ class parallel_tactic : public tactic {
             }
         }
 
+        void stats(::statistics& st) {
+            for (auto* t : m_tasks) 
+                t->get_solver().collect_statistics(st);
+            for (auto* t : m_active) 
+                t->get_solver().collect_statistics(st);
+        }
+
         void reset() {
-            for (auto* t : m_tasks) dealloc(t);
-            for (auto* t : m_active) dealloc(t);
+            for (auto* t : m_tasks) 
+                dealloc(t);
+            for (auto* t : m_active) 
+                dealloc(t);
             m_tasks.reset();
             m_active.reset();
+            m_num_waiters = 0;
+            m_shutdown = false;
         }
 
         std::ostream& display(std::ostream& out) {
@@ -161,9 +183,6 @@ class parallel_tactic : public tactic {
         cube_var(expr_ref_vector const& c, expr_ref_vector const& vs):
             m_vars(vs), m_cube(c) {}
 
-        cube_var(cube_var const& other):
-            m_vars(other.m_vars), m_cube(other.m_cube) {}
-
         cube_var operator()(ast_translation& tr) {
             expr_ref_vector vars(tr(m_vars));
             expr_ref_vector cube(tr(m_cube));
@@ -183,6 +202,7 @@ class parallel_tactic : public tactic {
         ref<solver>     m_solver;                 // solver state
         unsigned        m_depth;                  // number of nested calls to cubing
         double          m_width;                  // estimate of fraction of problem handled by state
+        bool            m_giveup;
 
     public:
         solver_state(ast_manager* m, solver* s, params_ref const& p): 
@@ -192,7 +212,8 @@ class parallel_tactic : public tactic {
             m_params(p),
             m_solver(s),
             m_depth(0),
-            m_width(1.0)
+            m_width(1.0),
+            m_giveup(false)
         {
         }
 
@@ -205,7 +226,7 @@ class parallel_tactic : public tactic {
         solver const& get_solver() const { return *m_solver; }
 
         void set_assumptions(ptr_vector<expr> const& asms) {
-            m_assumptions.append(asms.size(), asms.c_ptr());
+            m_assumptions.append(asms.size(), asms.data());
         }
         
         bool has_assumptions() const { return !m_assumptions.empty(); }
@@ -231,7 +252,9 @@ class parallel_tactic : public tactic {
         vector<cube_var> split_cubes(unsigned n) {
             vector<cube_var> result;
             while (n-- > 0 && !m_cubes.empty()) {
+                DEBUG_CODE(for (expr* c : m_cubes.back().cube()) SASSERT(c););
                 result.push_back(m_cubes.back());
+
                 m_cubes.pop_back();
             }
             return result;
@@ -239,6 +262,7 @@ class parallel_tactic : public tactic {
 
         void set_cubes(vector<cube_var>& c) {
             m_cubes.reset();
+            DEBUG_CODE(for (auto & cb : c) for (expr* e : cb.cube()) SASSERT(e););
             m_cubes.append(c);
         }
 
@@ -256,13 +280,28 @@ class parallel_tactic : public tactic {
             set_simplify_params(true);         // retain blocked
             r = get_solver().check_sat(m_assumptions);
             if (r != l_undef) return r;
+            if (canceled()) return l_undef;
             IF_VERBOSE(2, verbose_stream() << "(parallel.tactic simplify-2)\n";);
             set_simplify_params(false);        // remove blocked
             r = get_solver().check_sat(m_assumptions);
             return r;            
         }
 
+        bool giveup() {
+            if (m_giveup)
+                return m_giveup;
+            std::string r = get_solver().reason_unknown(); 
+            std::string inc("(incomplete");
+            m_giveup |= r.compare(0, inc.size(), inc) == 0;
+            inc = "(sat.giveup";
+            m_giveup |= r.compare(0, inc.size(), inc) == 0;
+            if (m_giveup)
+                IF_VERBOSE(0, verbose_stream() << r << "\n");
+            return m_giveup;
+        }
+
         void assert_cube(expr_ref_vector const& cube) {
+            IF_VERBOSE(3, verbose_stream() << "assert cube: " << cube << "\n");
             get_solver().assert_expr(cube);
             m_asserted_cubes.append(cube);
         }
@@ -292,17 +331,21 @@ class parallel_tactic : public tactic {
             p.copy(m_params);
             double exp = pp.simplify_exp();
             exp = std::max(exp, 1.0);
-            unsigned mult = static_cast<unsigned>(pow(exp, m_depth - 1));
+            unsigned mult = static_cast<unsigned>(pow(exp, static_cast<double>(m_depth - 1)));
+            unsigned max_conflicts = pp.simplify_max_conflicts();
+            if (max_conflicts < 1000000)
+                max_conflicts *= std::max(m_depth, 1u);
             p.set_uint("inprocess.max", pp.simplify_inprocess_max() * mult);
             p.set_uint("restart.max", pp.simplify_restart_max() * mult);
-            p.set_bool("lookahead_simplify", true);
+            p.set_bool("lookahead_simplify", m_depth > 2);
             p.set_bool("retain_blocked_clauses", retain_blocked);
+            p.set_uint("max_conflicts", max_conflicts);
             if (m_depth > 1) p.set_uint("bce_delay", 0);
             get_solver().updt_params(p);
         }
 
         bool canceled() { 
-            return m().canceled();
+            return m_giveup || !m().inc();
         }
 
         std::ostream& display(std::ostream& out) {
@@ -327,16 +370,17 @@ private:
     unsigned      m_branches;
     unsigned      m_backtrack_frequency;
     unsigned      m_conquer_delay;
-    volatile bool m_has_undef;
+    std::atomic<bool> m_has_undef;
     bool          m_allsat;
     unsigned      m_num_unsat;
     unsigned      m_last_depth;
     int           m_exn_code;
     std::string   m_exn_msg;
+    std::string   m_reason_undef;
 
     void init() {
         parallel_params pp(m_params);
-        m_num_threads = std::min((unsigned)omp_get_num_procs(), pp.threads_max());
+        m_num_threads = std::min((unsigned) std::thread::hardware_concurrency(), pp.threads_max());
         m_progress = 0;
         m_has_undef = false;
         m_allsat = false;
@@ -351,9 +395,9 @@ private:
     }
 
     void log_branches(lbool status) {
-        IF_VERBOSE(0, verbose_stream() << "(tactic.parallel :progress " << m_progress << "% ";
-                   if (status == l_true)  verbose_stream() << ":status sat";
-                   if (status == l_undef) verbose_stream() << ":status unknown";
+        IF_VERBOSE(1, verbose_stream() << "(tactic.parallel :progress " << m_progress << "%";
+                   if (status == l_true)  verbose_stream() << " :status sat";
+                   if (status == l_undef) verbose_stream() << " :status unknown";
                    if (m_num_unsat > 0) verbose_stream() << " :closed " << m_num_unsat << "@" << m_last_depth;
                    verbose_stream() << " :open " << m_branches << ")\n";);
     }
@@ -408,6 +452,12 @@ private:
             }
             m_models.push_back(mdl.get());
         }
+        else if (m_models.empty()) {
+            if (!m_has_undef) {
+                m_has_undef = true;
+                m_reason_undef = "incomplete";
+            }
+        }
         if (!m_allsat) {
             m_queue.shutdown();
         }
@@ -429,8 +479,14 @@ private:
         }
     }
         
-    void report_undef(solver_state& s) {
-        m_has_undef = true;
+    void report_undef(solver_state& s, std::string const& reason) {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_has_undef) {
+                m_has_undef = true;
+                m_reason_undef = reason;
+            }
+        }
         close_branch(s, l_undef);
     }
 
@@ -438,8 +494,10 @@ private:
         ast_manager& m = s.m();
         vector<cube_var> cube, hard_cubes, cubes;
         expr_ref_vector vars(m);
+        unsigned num_simplifications = 0;
 
     cube_again:
+        if (canceled(s)) return;
         // extract up to one cube and add it.
         cube.reset();
         cube.append(s.split_cubes(1));
@@ -451,10 +509,12 @@ private:
             vars.reset();
             vars.append(cube.get(0).vars());
         }
+        num_simplifications = 0;
 
     simplify_again:
-        s.inc_depth(1);
+        ++num_simplifications;
         // simplify
+        s.inc_depth(1);
         if (canceled(s)) return;
         switch (s.simplify()) {
         case l_undef: break;
@@ -462,6 +522,7 @@ private:
         case l_false: report_unsat(s); return;                
         }
         if (canceled(s)) return;
+        if (s.giveup()) { report_undef(s, s.get_solver().reason_unknown()); return; }
         
         if (memory_pressure()) {
             goto simplify_again;
@@ -476,7 +537,11 @@ private:
         unsigned num_backtracks = 0, width = 0;
         while (cutoff > 0 && !canceled(s)) {
             expr_ref_vector c = s.get_solver().cube(vars, cutoff);
-            if (c.empty()) {
+            if (c.empty() || (cube.size() == 1 && m.is_true(c.back()))) {
+                if (num_simplifications > 1) {
+                    report_undef(s, std::string("cube simplifications exceeded")); 
+                    return;
+                }
                 goto simplify_again;
             }
             if (m.is_false(c.back())) {                
@@ -490,6 +555,7 @@ private:
             if (conquer) {
                 is_sat = conquer->check_sat(c);
             }
+            DEBUG_CODE(for (expr* e : c) SASSERT(e););
             switch (is_sat) {
             case l_false: 
                 cutoff = c.size();
@@ -603,15 +669,15 @@ private:
     void run_solver() {
         try {
             while (solver_state* st = m_queue.get_task()) {
-                cube_and_conquer(*st);
+                cube_and_conquer(*st);                
                 collect_statistics(*st);
                 m_queue.task_done(st);
-                if (st->m().canceled()) m_queue.shutdown();
-                IF_VERBOSE(1, display(verbose_stream()););
+                if (!st->m().inc()) m_queue.shutdown();
+                IF_VERBOSE(2, display(verbose_stream()););
                 dealloc(st);
             }
         }
-        catch (z3_exception& ex) {            
+        catch (z3_exception& ex) {   
             IF_VERBOSE(1, verbose_stream() << ex.msg() << "\n";);
             if (m_queue.in_shutdown()) return;
             m_queue.shutdown();
@@ -642,6 +708,7 @@ private:
             threads.push_back(std::thread([this]() { run_solver(); }));
         for (std::thread& t : threads) 
             t.join();
+        m_queue.stats(m_stats);
         m_manager.limit().reset_cancel();
         if (m_exn_code == -1) 
             throw default_exception(std::move(m_exn_msg));
@@ -659,13 +726,15 @@ private:
     std::ostream& display(std::ostream& out) {
         unsigned n_models, n_unsat;
         double n_progress;
+        statistics st;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             n_models   = m_models.size();
             n_unsat    = m_num_unsat;
             n_progress = m_progress;
+            st.copy(m_stats);
         }
-        m_stats.display(out);
+        st.display(out);
         m_queue.display(out);
         out << "(tactic.parallel :unsat " << n_unsat << " :progress " << n_progress << "% :models " << n_models << ")\n";
         return out;
@@ -681,9 +750,12 @@ public:
         init();
     }
 
-    void operator ()(const goal_ref & g,goal_ref_buffer & result) override {
+    void operator()(const goal_ref & g,goal_ref_buffer & result) override {
+        cleanup();
         fail_if_proof_generation("parallel-tactic", g);
         ast_manager& m = g->m();        
+        if (m.has_trace_stream())
+            throw default_exception("parallel tactic does not work with trace");
         solver* s = m_solver->translate(m, m_params);
         solver_state* st = alloc(solver_state, nullptr, s, m_params);
         m_queue.add_task(st);
@@ -715,9 +787,10 @@ public:
             g->assert_expr(m.mk_false(), pr, lcore);            
             break;
         case l_undef:
-            if (m.canceled()) {
+            if (!m.inc()) 
                 throw tactic_exception(Z3_CANCELED_MSG);
-            }
+            if (m_has_undef)
+                throw tactic_exception(m_reason_undef.c_str());
             break;
         }
         result.push_back(g.get());
@@ -730,6 +803,7 @@ public:
 
     void cleanup() override {
         m_queue.reset();
+        m_models.reset();
     }
 
     tactic* translate(ast_manager& m) override {
@@ -753,6 +827,7 @@ public:
     void reset_statistics() override {
         m_stats.reset();
     }
+
 };
 
 
@@ -760,3 +835,4 @@ tactic * mk_parallel_tactic(solver* s, params_ref const& p) {
     return alloc(parallel_tactic, s, p);
 }
 
+#endif

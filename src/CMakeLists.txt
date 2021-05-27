@@ -36,9 +36,7 @@ endforeach()
 # that has not yet been declared.
 add_subdirectory(util)
 add_subdirectory(math/polynomial)
-add_subdirectory(sat)
-add_subdirectory(nlsat)
-add_subdirectory(util/lp)
+add_subdirectory(math/dd)
 add_subdirectory(math/hilbert)
 add_subdirectory(math/simplex)
 add_subdirectory(math/automata)
@@ -46,31 +44,38 @@ add_subdirectory(math/interval)
 add_subdirectory(math/realclosure)
 add_subdirectory(math/subpaving)
 add_subdirectory(ast)
+add_subdirectory(params)
 add_subdirectory(ast/rewriter)
 add_subdirectory(ast/normal_forms)
+add_subdirectory(ast/macros)
 add_subdirectory(model)
 add_subdirectory(tactic)
 add_subdirectory(ast/substitution)
+add_subdirectory(ast/euf)
+add_subdirectory(smt/params)
 add_subdirectory(parsers/util)
 add_subdirectory(math/grobner)
-add_subdirectory(math/euclid)
+add_subdirectory(sat)
+add_subdirectory(nlsat)
 add_subdirectory(tactic/core)
 add_subdirectory(math/subpaving/tactic)
 add_subdirectory(tactic/aig)
-add_subdirectory(solver)
-add_subdirectory(sat/tactic)
 add_subdirectory(tactic/arith)
-add_subdirectory(nlsat/tactic)
-add_subdirectory(ackermannization)
+add_subdirectory(solver)
 add_subdirectory(cmd_context)
 add_subdirectory(cmd_context/extra_cmds)
 add_subdirectory(parsers/smt2)
-add_subdirectory(ast/proofs)
-add_subdirectory(ast/fpa)
-add_subdirectory(ast/macros)
+add_subdirectory(solver/assertions)
 add_subdirectory(ast/pattern)
 add_subdirectory(ast/rewriter/bit_blaster)
-add_subdirectory(smt/params)
+add_subdirectory(math/lp)
+add_subdirectory(qe/mbp)
+add_subdirectory(sat/smt)
+add_subdirectory(sat/tactic)
+add_subdirectory(nlsat/tactic)
+add_subdirectory(ackermannization)
+add_subdirectory(ast/proofs)
+add_subdirectory(ast/fpa)
 add_subdirectory(smt/proto_model)
 add_subdirectory(smt)
 add_subdirectory(tactic/bv)
@@ -96,7 +101,6 @@ add_subdirectory(tactic/portfolio)
 add_subdirectory(opt)
 add_subdirectory(api)
 add_subdirectory(api/dll)
-
 ################################################################################
 # libz3
 ################################################################################
@@ -105,12 +109,15 @@ set (object_files "")
 foreach (component ${Z3_LIBZ3_COMPONENTS_LIST})
   list(APPEND object_files $<TARGET_OBJECTS:${component}>)
 endforeach()
-if (BUILD_LIBZ3_SHARED)
+if (Z3_BUILD_LIBZ3_SHARED)
   set(lib_type "SHARED")
 else()
   set(lib_type "STATIC")
 endif()
 add_library(libz3 ${lib_type} ${object_files})
+target_include_directories(libz3 INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 set_target_properties(libz3 PROPERTIES
   # VERSION determines the version in the filename of the shared library.
   # SOVERSION determines the value of the DT_SONAME field on ELF platforms.
@@ -164,7 +171,7 @@ set (libz3_public_headers
 )
 foreach (header ${libz3_public_headers})
   set_property(TARGET libz3 APPEND PROPERTY
-    PUBLIC_HEADER "${CMAKE_SOURCE_DIR}/src/api/${header}")
+    PUBLIC_HEADER "${PROJECT_SOURCE_DIR}/src/api/${header}")
 endforeach()
 set_property(TARGET libz3 APPEND PROPERTY
     PUBLIC_HEADER "${CMAKE_CURRENT_BINARY_DIR}/util/z3_version.h")
@@ -173,7 +180,7 @@ install(TARGETS libz3
   EXPORT Z3_EXPORTED_TARGETS
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}" # On Windows this installs ``libz3.lib`` which CMake calls the "corresponding import library". Do we want this installed?
-  RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}" # For Windows. DLLs are runtime targets for CMake
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" # For Windows. DLLs are runtime targets for CMake
   PUBLIC_HEADER DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
 
@@ -187,12 +194,12 @@ if (MSVC)
   add_custom_command(OUTPUT "${dll_module_exports_file}"
     COMMAND
       "${PYTHON_EXECUTABLE}"
-      "${CMAKE_SOURCE_DIR}/scripts/mk_def_file.py"
+      "${PROJECT_SOURCE_DIR}/scripts/mk_def_file.py"
       "${dll_module_exports_file}"
       "libz3"
       ${Z3_FULL_PATH_API_HEADER_FILES_TO_SCAN}
     DEPENDS
-      "${CMAKE_SOURCE_DIR}/scripts/mk_def_file.py"
+      "${PROJECT_SOURCE_DIR}/scripts/mk_def_file.py"
       ${Z3_GENERATED_FILE_EXTRA_DEPENDENCIES}
       ${Z3_FULL_PATH_API_HEADER_FILES_TO_SCAN}
     COMMENT "Generating \"${dll_module_exports_file}\""
@@ -209,22 +216,36 @@ endif()
 ################################################################################
 # Z3 executable
 ################################################################################
-add_subdirectory(shell)
+cmake_dependent_option(Z3_BUILD_EXECUTABLE
+    "Build the z3 executable" ON
+    "CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR" OFF)
+
+if (Z3_BUILD_EXECUTABLE)
+    add_subdirectory(shell)
+endif()
 
 ################################################################################
 # z3-test
 ################################################################################
-add_subdirectory(test)
+
+cmake_dependent_option(Z3_BUILD_TEST_EXECUTABLES
+    "Build test executables" ON
+    "CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR" OFF)
+
+
+if (Z3_BUILD_TEST_EXECUTABLES)
+    add_subdirectory(test)
+endif()
 
 
 ################################################################################
 # Z3 API bindings
 ################################################################################
-option(BUILD_PYTHON_BINDINGS "Build Python bindings for Z3" OFF)
-if (BUILD_PYTHON_BINDINGS)
-  if (NOT BUILD_LIBZ3_SHARED)
+option(Z3_BUILD_PYTHON_BINDINGS "Build Python bindings for Z3" OFF)
+if (Z3_BUILD_PYTHON_BINDINGS)
+  if (NOT Z3_BUILD_LIBZ3_SHARED)
     message(FATAL_ERROR "The python bindings will not work with a static libz3. "
-            "You either need to disable BUILD_PYTHON_BINDINGS or enable BUILD_LIBZ3_SHARED")
+            "You either need to disable Z3_BUILD_PYTHON_BINDINGS or enable Z3_BUILD_LIBZ3_SHARED")
   endif()
   add_subdirectory(api/python)
 endif()
@@ -232,11 +253,11 @@ endif()
 ################################################################################
 # .NET bindings
 ################################################################################
-option(BUILD_DOTNET_BINDINGS "Build .NET bindings for Z3" OFF)
-if (BUILD_DOTNET_BINDINGS)
-  if (NOT BUILD_LIBZ3_SHARED)
+option(Z3_BUILD_DOTNET_BINDINGS "Build .NET bindings for Z3" OFF)
+if (Z3_BUILD_DOTNET_BINDINGS)
+  if (NOT Z3_BUILD_LIBZ3_SHARED)
     message(FATAL_ERROR "The .NET bindings will not work with a static libz3. "
-      "You either need to disable BUILD_DOTNET_BINDINGS or enable BUILD_LIBZ3_SHARED")
+      "You either need to disable Z3_BUILD_DOTNET_BINDINGS or enable Z3_BUILD_LIBZ3_SHARED")
   endif()
   add_subdirectory(api/dotnet)
 endif()
@@ -244,13 +265,25 @@ endif()
 ################################################################################
 # Java bindings
 ################################################################################
-option(BUILD_JAVA_BINDINGS "Build Java bindings for Z3" OFF)
-if (BUILD_JAVA_BINDINGS)
-  if (NOT BUILD_LIBZ3_SHARED)
+option(Z3_BUILD_JAVA_BINDINGS "Build Java bindings for Z3" OFF)
+if (Z3_BUILD_JAVA_BINDINGS)
+  if (NOT Z3_BUILD_LIBZ3_SHARED)
     message(FATAL_ERROR "The Java bindings will not work with a static libz3. "
-      "You either need to disable BUILD_JAVA_BINDINGS or enable BUILD_LIBZ3_SHARED")
+      "You either need to disable Z3_BUILD_JAVA_BINDINGS or enable Z3_BUILD_LIBZ3_SHARED")
   endif()
   add_subdirectory(api/java)
+endif()
+
+################################################################################
+# Julia bindings
+################################################################################
+option(Z3_BUILD_JULIA_BINDINGS "Build Julia bindings for Z3" OFF)
+if (Z3_BUILD_JULIA_BINDINGS)
+  if (NOT Z3_BUILD_LIBZ3_SHARED)
+    message(FATAL_ERROR "The Julia bindings will not work with a static libz3."
+      "You either need to disable Z3_BUILD_JULIA_BINDINGS or enable Z3_BUILD_LIBZ3_SHARED")
+  endif()
+  add_subdirectory(api/julia)
 endif()
 
 # TODO: Implement support for other bindigns
