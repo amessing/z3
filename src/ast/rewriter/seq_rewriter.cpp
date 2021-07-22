@@ -714,6 +714,14 @@ br_status seq_rewriter::mk_app_core(func_decl * f, unsigned num_args, expr * con
         SASSERT(num_args == 1);
         st = mk_str_stoi(args[0], result);
         break;
+    case OP_STRING_UBVTOS:
+        SASSERT(num_args == 1);
+        st = mk_str_ubv2s(args[0], result);
+        break;
+    case OP_STRING_SBVTOS:
+      SASSERT(num_args == 1);
+      st = mk_str_sbv2s(args[0], result);
+      break;
     case _OP_STRING_CONCAT:
     case _OP_STRING_PREFIX:
     case _OP_STRING_SUFFIX:
@@ -1775,6 +1783,10 @@ br_status seq_rewriter::mk_seq_replace(expr* a, expr* b, expr* c, expr_ref& resu
         result = str().mk_concat(c, a);
         return BR_REWRITE1;
     }
+    if (str().is_empty(a) && str().is_empty(c)) {
+        result = a;
+        return BR_DONE;
+    }
 
     m_lhs.reset();
     str().get_concat(a, m_lhs);
@@ -2200,6 +2212,41 @@ br_status seq_rewriter::mk_str_is_digit(expr* a, expr_ref& result) {
 }
 
 
+br_status seq_rewriter::mk_str_ubv2s(expr* a, expr_ref& result) {
+    bv_util bv(m());
+    rational val;
+    if (bv.is_numeral(a, val)) {
+        result = str().mk_string(zstring(val));
+        return BR_DONE;
+    }
+    return BR_FAILED;
+}
+
+br_status seq_rewriter::mk_str_sbv2s(expr *a, expr_ref &result) {
+    bv_util bv(m());
+    rational val;
+    unsigned bv_size = 0;
+    if (bv.is_numeral(a, val, bv_size)) {
+        rational r = mod(val, rational::power_of_two(bv_size));
+        SASSERT(!r.is_neg());
+        if (r >= rational::power_of_two(bv_size - 1)) {
+            r -= rational::power_of_two(bv_size);
+        }
+        result = str().mk_string(zstring(r));
+        return BR_DONE;
+    }
+    
+    bv_size = bv.get_bv_size(a);
+    result = m().mk_ite(
+        bv.mk_slt(a,bv.mk_numeral(0, bv_size)),
+        str().mk_concat(
+            str().mk_string(zstring("-")),
+            str().mk_ubv2s(bv.mk_bv_neg(a))
+        ),
+        str().mk_ubv2s(a));
+    return BR_REWRITE_FULL;
+}
+
 br_status seq_rewriter::mk_str_itos(expr* a, expr_ref& result) {
     rational r;
     if (m_autil.is_numeral(a, r)) {
@@ -2259,6 +2306,11 @@ br_status seq_rewriter::mk_str_stoi(expr* a, expr_ref& result) {
     expr* b;
     if (str().is_itos(a, b)) {
         result = m().mk_ite(m_autil.mk_ge(b, zero()), b, minus_one());
+        return BR_DONE;
+    }
+    if (str().is_ubv2s(a, b)) {
+        bv_util bv(m());
+        result = bv.mk_bv2int(b);
         return BR_DONE;
     }
     
@@ -3134,7 +3186,7 @@ expr_ref seq_rewriter::mk_der_cond(expr* cond, expr* ele, sort* seq_sort) {
     expr *c1 = nullptr, *c2 = nullptr, *ch1 = nullptr, *ch2 = nullptr;
     unsigned ch = 0;
     expr_ref result(m()), r1(m()), r2(m());
-    if (m().is_eq(cond, ch1, ch2)) {
+    if (m().is_eq(cond, ch1, ch2) && u().is_char(ch1)) {
         r1 = u().mk_le(ch1, ch2);
         r1 = mk_der_cond(r1, ele, seq_sort);
         r2 = u().mk_le(ch2, ch1);
@@ -3195,11 +3247,17 @@ expr_ref seq_rewriter::mk_derivative_rec(expr* ele, expr* r) {
         }
         expr_ref dr2 = mk_derivative(ele, r2);
         is_n = re_predicate(is_n, seq_sort);
-        // Instead of mk_der_union here, we use mk_der_antimorov_union to
-        // force the two cases to be considered separately and lifted to
-        // the top level. This avoids blowup in cases where determinization
-        // is expensive.
-        return mk_der_antimorov_union(result, mk_der_concat(is_n, dr2));
+        if (re().is_empty(dr2)) {
+            //do not concatenate [], it is a deade-end 
+            return result;
+        }
+        else {
+            // Instead of mk_der_union here, we use mk_der_antimorov_union to
+            // force the two cases to be considered separately and lifted to
+            // the top level. This avoids blowup in cases where determinization
+            // is expensive.
+            return mk_der_antimorov_union(result, mk_der_concat(is_n, dr2));
+        }
     }
     else if (re().is_star(r, r1)) {
         return mk_der_concat(mk_derivative(ele, r1), r);
@@ -3232,8 +3290,15 @@ expr_ref seq_rewriter::mk_derivative_rec(expr* ele, expr* r) {
         if (lo > 0) {
             lo--;
         }
-        result = re().mk_loop(r1, lo);
-        return mk_der_concat(mk_derivative(ele, r1), result);
+        result = mk_derivative(ele, r1);
+        //do not concatenate with [] (emptyset)
+        if (re().is_empty(result)) {
+            return result;
+        }
+        else {
+            //do not create loop r1{0,}, instead create r1*
+            return mk_der_concat(result, (lo == 0 ? re().mk_star(r1) : re().mk_loop(r1, lo)));
+        }
     }
     else if (re().is_loop(r, r1, lo, hi)) {
         if (hi == 0) {
@@ -3243,8 +3308,14 @@ expr_ref seq_rewriter::mk_derivative_rec(expr* ele, expr* r) {
         if (lo > 0) {
             lo--;
         }
-        result = re().mk_loop(r1, lo, hi);
-        return mk_der_concat(mk_derivative(ele, r1), result);
+        result = mk_derivative(ele, r1);
+        //do not concatenate with [] (emptyset) or handle the rest of the loop if no more iterations remain
+        if (re().is_empty(result) || hi == 0) {
+            return result;
+        }
+        else {
+            return mk_der_concat(result, re().mk_loop(r1, lo, hi));
+        }
     }
     else if (re().is_full_seq(r) ||
              re().is_empty(r)) {
@@ -3264,6 +3335,8 @@ expr_ref seq_rewriter::mk_derivative_rec(expr* ele, expr* r) {
             return result;
         }
         else if (str().is_empty(r1)) {
+            //observe: str().is_empty(r1) checks that r = () = epsilon
+            //while mk_empty() = [], because deriv(epsilon) = [] = nothing
             return mk_empty();
         }
 #if 0
@@ -3318,6 +3391,7 @@ expr_ref seq_rewriter::mk_derivative_rec(expr* ele, expr* r) {
         }
         expr* e1 = nullptr, *e2 = nullptr;
         if (str().is_unit(r1, e1) && str().is_unit(r2, e2)) {
+  	    SASSERT(u().is_char(e1));
             // Use mk_der_cond to normalize
             STRACE("seq_verbose", tout << "deriv range str" << std::endl;);
             expr_ref p1(u().mk_le(e1, ele), m());
@@ -3876,6 +3950,7 @@ br_status seq_rewriter::mk_re_union(expr* a, expr* b, expr_ref& result) {
     comp(none) -> all
     comp(all) -> none
     comp(comp(e1)) -> e1
+    comp(epsilon) -> .+
 */
 br_status seq_rewriter::mk_re_complement(expr* a, expr_ref& result) {
     expr *e1 = nullptr, *e2 = nullptr;
@@ -3897,6 +3972,10 @@ br_status seq_rewriter::mk_re_complement(expr* a, expr_ref& result) {
     }
     if (re().is_complement(a, e1)) {
         result = e1;
+        return BR_DONE;
+    }
+    if (re().is_to_re(a, e1) && str().is_empty(e1)) {
+        result = re().mk_plus(re().mk_full_char(a->get_sort()));
         return BR_DONE;
     }
     return BR_FAILED;
@@ -4086,6 +4165,7 @@ br_status seq_rewriter::mk_re_power(func_decl* f, expr* a, expr_ref& result) {
    a+* = a*
    emp* = ""
    all* = all   
+   .+* = all
 */
 br_status seq_rewriter::mk_re_star(expr* a, expr_ref& result) {
     expr* b, *c, *b1, *c1;
@@ -4108,7 +4188,10 @@ br_status seq_rewriter::mk_re_star(expr* a, expr_ref& result) {
         return BR_DONE;
     }
     if (re().is_plus(a, b)) {
-        result = re().mk_star(b);
+        if (re().is_full_char(b))
+            result = re().mk_full_seq(a->get_sort());
+        else
+            result = re().mk_star(b);
         return BR_DONE;
     }
     if (re().is_union(a, b, c)) {

@@ -134,20 +134,37 @@ namespace opt {
     }
 
     void model_based_opt::def::normalize() {
-        if (m_div.is_one()) return;
-        rational g(m_div);
-        g = gcd(g, m_coeff);
-        for (var const& v : m_vars) {
-            g = gcd(g, abs(v.m_coeff));
-            if (g.is_one()) break;
+        if (!m_div.is_int()) {
+            rational den = denominator(m_div);
+            SASSERT(den > 1);
+            for (var& v : m_vars)
+                v.m_coeff *= den;
+            m_coeff *= den;
+            m_div *= den;
+
         }
         if (m_div.is_neg()) {
-            g.neg();
+            for (var& v : m_vars)
+                v.m_coeff.neg();
+            m_coeff.neg();
+            m_div.neg();
+        }
+        if (m_div.is_one())
+            return;
+        rational g(m_div);
+        if (!m_coeff.is_int())
+            return;
+        g = gcd(g, m_coeff);
+        for (var const& v : m_vars) {
+            if (!v.m_coeff.is_int())
+                return;
+            g = gcd(g, abs(v.m_coeff));
+            if (g.is_one()) 
+                break;
         }
         if (!g.is_one()) {
-            for (var& v : m_vars) {
-                v.m_coeff /= g;
-            }
+            for (var& v : m_vars) 
+                v.m_coeff /= g;            
             m_coeff /= g;
             m_div /= g;
         }
@@ -519,6 +536,13 @@ namespace opt {
         }
     }
 
+    /**
+    * a1 > 0
+    * a1*x + r1 = value
+    * a2*x + r2 <= 0
+    * ------------------
+    * a1*r2 - a2*r1 <= value
+    */
     void model_based_opt::solve(unsigned row_src, rational const& a1, unsigned row_dst, unsigned x) {
         SASSERT(a1 == get_coefficient(row_src, x));
         SASSERT(a1.is_pos());
@@ -1130,9 +1154,12 @@ namespace opt {
         }
         TRACE("opt1", display(tout << "tableau after replace x by y := v" << y << "\n"););
         def result = project(y, compute_def);
-        if (compute_def) 
-            result = (result * D) + u;     
-        SASSERT(!compute_def || eval(result) == eval(x));
+        if (compute_def) {
+            result = (result * D) + u;
+            m_var2value[x] = eval(result);
+        }
+        TRACE("opt1", display(tout << "tableau after project y" << y << "\n"););
+	
         return result;
     }
 
@@ -1181,7 +1208,7 @@ namespace opt {
     // 3 | -t  & 21 | (-ct + 3s) & a-t <= 3u
 
     model_based_opt::def model_based_opt::solve_for(unsigned row_id1, unsigned x, bool compute_def) {
-        TRACE("opt", tout << "v" << x << "\n" << m_rows[row_id1] << "\n";);
+        TRACE("opt", tout << "v" << x << " := " << eval(x) << "\n" << m_rows[row_id1] << "\n";);
         rational a = get_coefficient(row_id1, x), b;
         ineq_type ty = m_rows[row_id1].m_type;
         SASSERT(!a.is_zero());
@@ -1193,10 +1220,11 @@ namespace opt {
         SASSERT(a.is_pos());
         if (ty == t_lt) {
             SASSERT(compute_def);
-            m_rows[row_id1].m_coeff += a;      
+            m_rows[row_id1].m_coeff -= m_rows[row_id1].m_value;
             m_rows[row_id1].m_type = t_le;
-            m_rows[row_id1].m_value += a;
-        }
+            m_rows[row_id1].m_value = 0;
+        }        
+
         if (m_var2is_int[x] && !a.is_one()) {
             row& r1 = m_rows[row_id1];
             vector<var> coeffs;
@@ -1231,6 +1259,7 @@ namespace opt {
         if (compute_def) {
             result = def(m_rows[row_id1], x);
             m_var2value[x] = eval(result);
+            TRACE("opt1", tout << "updated eval " << x << " := " << eval(x) << "\n";);
         }
         retire_row(row_id1);
         return result;

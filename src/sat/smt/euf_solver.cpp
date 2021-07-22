@@ -286,11 +286,9 @@ namespace euf {
 
     void solver::asserted(literal l) {
         expr* e = m_bool_var2expr.get(l.var(), nullptr);
-        if (!e) {
-            TRACE("euf", tout << "asserted: " << l << "@" << s().scope_lvl() << "\n";);
+	TRACE("euf", tout << "asserted: " << l << "@" << s().scope_lvl() << " := " << mk_bounded_pp(e, m) << "\n";);
+        if (!e) 
             return;        
-        }
-        TRACE("euf", tout << "asserted: " << l << "@" << s().scope_lvl() << " := " << mk_bounded_pp(e, m) << "\n";);
         euf::enode* n = m_egraph.find(e);
         if (!n)
             return;
@@ -302,13 +300,17 @@ namespace euf {
         size_t* c = to_ptr(l);
         SASSERT(is_literal(c));
         SASSERT(l == get_literal(c));
-        if (!sign && n->is_equality()) {
+	    if (n->value_conflict()) {
+            euf::enode* nb = sign ? mk_false() : mk_true();
+            m_egraph.merge(n, nb, c);
+	    }
+        else if (!sign && n->is_equality()) {
             SASSERT(!m.is_iff(e));
             euf::enode* na = n->get_arg(0);
             euf::enode* nb = n->get_arg(1);
             m_egraph.merge(na, nb, c);
         }
-        else if (n->merge_tf() || n->value_conflict()) {
+        else if (n->merge_tf()) {
             euf::enode* nb = sign ? mk_false() : mk_true();
             m_egraph.merge(n, nb, c);
         }
@@ -340,21 +342,19 @@ namespace euf {
                 break;
             propagated = true;             
         }
-        DEBUG_CODE(if (!s().inconsistent()) check_missing_eq_propagation(););
+        DEBUG_CODE(if (!propagated && !s().inconsistent()) check_missing_eq_propagation(););
         return propagated;
     }
 
     void solver::propagate_literals() {
         for (; m_egraph.has_literal() && !s().inconsistent() && !m_egraph.inconsistent(); m_egraph.next_literal()) {
-            euf::enode_bool_pair p = m_egraph.get_literal();
-            euf::enode* n = p.first;
-            bool is_eq = p.second;
+            auto [n, is_eq] = m_egraph.get_literal();
             expr* e = n->get_expr();
             expr* a = nullptr, *b = nullptr;
             bool_var v = n->bool_var();
             SASSERT(m.is_bool(e));
             size_t cnstr;
-            literal lit;            
+            literal lit;  
             if (is_eq) {
                 VERIFY(m.is_eq(e, a, b));
                 cnstr = eq_constraint().to_index();
@@ -362,6 +362,10 @@ namespace euf {
             }
             else {
                 lbool val = n->get_root()->value();
+                if (val == l_undef && m.is_false(n->get_root()->get_expr()))
+                    val = l_false;
+                if (val == l_undef && m.is_true(n->get_root()->get_expr()))
+                    val = l_true;
                 a = e;
                 b = (val == l_true) ? m.mk_true() : m.mk_false();
                 SASSERT(val != l_undef);
@@ -447,8 +451,8 @@ namespace euf {
 
         if (!init_relevancy())
             give_up = true;
-
-
+        
+        unsigned num_nodes = m_egraph.num_nodes();
         for (auto* e : m_solvers) {
             if (!m.inc())
                 return sat::check_result::CR_GIVEUP;
@@ -466,6 +470,10 @@ namespace euf {
             return sat::check_result::CR_CONTINUE;
         if (give_up)
             return sat::check_result::CR_GIVEUP;
+        if (num_nodes < m_egraph.num_nodes()) {
+            IF_VERBOSE(1, verbose_stream() << "new nodes created, but not detected\n");
+            return sat::check_result::CR_CONTINUE;           
+        }
         if (m_qsolver)
             return m_qsolver->check();
         TRACE("after_search", s().display(tout););

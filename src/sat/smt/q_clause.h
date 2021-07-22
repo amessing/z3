@@ -29,7 +29,9 @@ namespace q {
         expr_ref rhs;
         bool     sign;
         lit(expr_ref const& lhs, expr_ref const& rhs, bool sign):
-            lhs(lhs), rhs(rhs), sign(sign) {}
+            lhs(lhs), rhs(rhs), sign(sign) {
+            SASSERT(!rhs.m().is_false(rhs) || !sign);
+        }
         std::ostream& display(std::ostream& out) const;
     };
 
@@ -57,7 +59,7 @@ namespace q {
         unsigned            m_index;
         vector<lit>         m_lits;
         quantifier_ref      m_q;
-        sat::literal        m_literal;
+        sat::literal        m_literal = sat::null_literal;
         q::quantifier_stat* m_stat = nullptr;
         binding*            m_bindings = nullptr;
 
@@ -75,10 +77,12 @@ namespace q {
     struct justification {
         expr*     m_lhs, *m_rhs;
         bool      m_sign;
+        unsigned  m_num_ev;
+        euf::enode_pair* m_evidence;
         clause&   m_clause;
         euf::enode* const* m_binding;
-        justification(lit const& l, clause& c, euf::enode* const* b):
-            m_lhs(l.lhs), m_rhs(l.rhs), m_sign(l.sign), m_clause(c), m_binding(b) {}
+        justification(lit const& l, clause& c, euf::enode* const* b, unsigned n, euf::enode_pair* ev):
+            m_lhs(l.lhs), m_rhs(l.rhs), m_sign(l.sign), m_clause(c), m_binding(b), m_num_ev(n), m_evidence(ev) {}
         sat::ext_constraint_idx to_index() const { 
             return sat::constraint_base::mem2base(this); 
         }
